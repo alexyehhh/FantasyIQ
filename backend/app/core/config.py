@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # CORS: comma-separated list of allowed origins
     cors_origins: str = "http://localhost:3000"
 
+    # NBA.com ingestion via nba_api (Milestone 3)
+    nba_api_timeout_seconds: float = 30.0
+
     @property
     def database_url(self) -> str:
         return (

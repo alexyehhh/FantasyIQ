@@ -1,0 +1,14 @@
+"""
+Importing this package registers every model with Base.metadata.
+
+Alembic's env.py imports this module (indirectly, via app.db.base)
+so autogenerate can see all tables. Anything added here later
+(e.g. NFL-specific stats tables) just needs an import line added.
+"""
+
+from app.db.models.game import Game
+from app.db.models.player import Player
+from app.db.models.player_game_stats import PlayerGameStats
+from app.db.models.team import Team
+
+__all__ = ["Team", "Player", "Game", "PlayerGameStats"]

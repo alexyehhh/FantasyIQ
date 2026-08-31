@@ -3,6 +3,8 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY pyproject.toml .
+COPY app ./app
+COPY data_pipeline ./data_pipeline
 RUN pip install --no-cache-dir -e ".[dev]"
 
 COPY . .
