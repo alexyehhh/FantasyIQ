@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # NBA.com ingestion via nba_api (Milestone 3)
     nba_api_timeout_seconds: float = 30.0
 
+    # NFL ingestion via ESPN's public site API
+    nfl_api_timeout_seconds: float = 30.0
+
     @property
     def database_url(self) -> str:
         return (
