@@ -3,12 +3,13 @@
 AI-powered fantasy sports (NBA/NFL) analytics platform. See `docs/` for the
 full Software Architecture Document.
 
-## Milestone 1: Development environment
+## What it does
 
-The current stack includes a health-checked backend, a Postgres schema, and a
-frontend that confirms it can reach the backend. Milestone 3 adds one-game
-ingestion through ESPN's public NBA/NFL site API endpoints, starting with
-NFL; the NBA pipeline built alongside it works the same way.
+- Ingests NBA and NFL game stats from ESPN's public site API into Postgres,
+  idempotently (safe to re-run).
+- Exposes a REST API for players and their per-game stat lines.
+- A Next.js frontend to search players and view a chart of their recent-game
+  stats.
 
 ### Prerequisites
 
@@ -48,7 +49,7 @@ alembic revision --autogenerate -m "describe the change"
 
 Always review the generated migration file before applying it — autogenerate is a strong starting point, not a guarantee.
 
-### NFL ingestion (Milestone 3)
+### NFL ingestion
 
 No API key is required. With the stack running and migrations applied, first
 find an ESPN event ID from the NFL scoreboard, then ingest one completed game:
@@ -95,7 +96,7 @@ The scoreboard endpoint is
 `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=YYYYMMDD`,
 and the same `--payload-stdin` fallback and idempotent-upsert behavior apply.
 
-### Player API (Milestone 4)
+### Player API
 
 With data ingested (or seeded — see below), the backend exposes read
 endpoints for players and their game stats:
@@ -114,7 +115,7 @@ since the two sports are stored in separate tables (see §9 of the
 architecture doc). Business logic lives in `app/services/players.py`,
 called by both this API and, later, the AI tool layer.
 
-### Frontend player page (Milestone 5)
+### Frontend player page
 
 With the backend running and data ingested or seeded, `/players` is a search
 page (by name and/or sport) linking to `/players/{id}`, a detail page showing
