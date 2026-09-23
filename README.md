@@ -114,6 +114,21 @@ since the two sports are stored in separate tables (see §9 of the
 architecture doc). Business logic lives in `app/services/players.py`,
 called by both this API and, later, the AI tool layer.
 
+### Frontend player page (Milestone 5)
+
+With the backend running and data ingested or seeded, `/players` is a search
+page (by name and/or sport) linking to `/players/{id}`, a detail page showing
+the player's info and a chart (Recharts) of one stat across their recent
+games, with a dropdown to switch which stat is charted. All backend calls go
+through `frontend/src/lib/api.ts`.
+
+Server-rendered pages (the player detail page) run inside the frontend's own
+Docker container, where `localhost` points at that container rather than the
+backend one — `INTERNAL_API_URL` (set in `docker-compose.yml` to the
+backend's Compose service name) is used there instead of
+`NEXT_PUBLIC_API_URL`, which browser-side code keeps using since it isn't
+reachable from the browser.
+
 ### Seed data (manual sanity check only — not real ingestion)
 
 ```bash
@@ -139,6 +154,13 @@ Note: `tests/test_models.py` hits a real Postgres database (not sqlite/mocked) �
 cd frontend
 npm install
 npm run dev
+```
+
+To run frontend tests (Jest + React Testing Library):
+
+```bash
+cd frontend
+npm test
 ```
 
 ## Project layout
