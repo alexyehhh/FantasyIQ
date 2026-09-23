@@ -95,6 +95,25 @@ The scoreboard endpoint is
 `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=YYYYMMDD`,
 and the same `--payload-stdin` fallback and idempotent-upsert behavior apply.
 
+### Player API (Milestone 4)
+
+With data ingested (or seeded — see below), the backend exposes read
+endpoints for players and their game stats:
+
+```
+GET /api/v1/players?sport=NBA&team_id=1&search=curry&limit=50&offset=0
+GET /api/v1/players/{id}
+GET /api/v1/players/{id}/stats?limit=10
+```
+
+`sport` (if given) must be `NBA` or `NFL`. `search` matches player name
+(case-insensitive substring). The stats endpoint returns each game's stat
+line most-recent-first; the shape of `stats` depends on the player's sport
+(NBA: points/rebounds/assists/...; NFL: passing/rushing/receiving/...),
+since the two sports are stored in separate tables (see §9 of the
+architecture doc). Business logic lives in `app/services/players.py`,
+called by both this API and, later, the AI tool layer.
+
 ### Seed data (manual sanity check only — not real ingestion)
 
 ```bash
