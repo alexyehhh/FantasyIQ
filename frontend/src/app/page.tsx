@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getHealth } from "@/lib/api";
 
 export default async function HomePage() {
@@ -31,6 +32,9 @@ export default async function HomePage() {
         </span>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
+      <Link href="/players" className="text-blue-600 hover:underline">
+        Browse players &rarr;
+      </Link>
     </main>
   );
 }
