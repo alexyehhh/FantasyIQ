@@ -52,7 +52,11 @@ services:
       context: ./frontend
     restart: unless-stopped
     environment:
+      # Browser-side fetches use the published port; server-rendered pages run
+      # inside this container, where "localhost" would point at itself rather
+      # than the backend, so they use the backend's Compose service name.
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      INTERNAL_API_URL: http://backend:8000
     ports:
       - "3000:3000"
     volumes:
