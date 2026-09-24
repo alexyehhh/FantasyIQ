@@ -30,7 +30,7 @@ export default async function DefenseDetailPage({
   }
 
   const [stats, schedule, scoring, season] = await Promise.all([
-    getDefenseStats(teamId, GAME_LOG_LIMIT),
+    getDefenseStats(teamId, GAME_LOG_LIMIT, "current"),
     getDefenseSchedule(teamId),
     getScoringPreset("NFL"),
     getDefenseSeason(teamId),
