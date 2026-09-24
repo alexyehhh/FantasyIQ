@@ -1,9 +1,12 @@
 import type {
+  DefenseDetail,
+  DefenseListItem,
   PlayerDetail,
   PlayerListItem,
   PlayerGameStatsEntry,
   PlayerSummary,
   ScheduleEntry,
+  ScoringConfig,
   TeamSummary,
 } from "@/lib/api";
 
@@ -70,6 +73,7 @@ export function makeEntry(
     game_date: "2026-01-05T18:00:00Z",
     week: null,
     stats: { points: 30 },
+    fantasy_points: 30,
     opponent: null,
     is_home: null,
     team_score: null,
@@ -142,4 +146,57 @@ export function scheduleFromGames(entries: PlayerGameStatsEntry[]): ScheduleEntr
       result: entry.result,
     }),
   );
+}
+
+/** A small NFL scoring config with distance-bracketed kickers and a bracketed defense. */
+export function makeScoringConfig(overrides: Partial<ScoringConfig> = {}): ScoringConfig {
+  return {
+    name: "Test league",
+    sport: "NFL",
+    player_weights: { passing_yards: 0.04, receptions: 1, extra_points_made: 1 },
+    field_goal_made: [
+      { min: 0, max: 39, points: 3 },
+      { min: 40, max: null, points: 5 },
+    ],
+    field_goal_missed: [{ min: 0, max: null, points: -1 }],
+    defense_weights: { sacks: 1 },
+    points_allowed: [
+      { min: 0, max: 0, points: 10 },
+      { min: 1, max: null, points: 0 },
+    ],
+    ...overrides,
+  };
+}
+
+const BENGALS = { id: 7, name: "Cincinnati Bengals", abbreviation: "CIN", bye_week: 6 };
+
+export function makeDefenseListItem(overrides: Partial<DefenseListItem> = {}): DefenseListItem {
+  return { ...makeTeam(BENGALS), fantasy_points: 34, ...overrides };
+}
+
+export function makeDefenseDetail(overrides: Partial<DefenseDetail> = {}): DefenseDetail {
+  return { ...makeTeam(BENGALS), next_game: null, ...overrides };
+}
+
+/** One defense game line under the default scoring (sacks 1, INT 2, ..., points allowed brackets). */
+export function makeDefenseEntry(
+  overrides: Partial<PlayerGameStatsEntry> = {},
+): PlayerGameStatsEntry {
+  return makeEntry({
+    week: 1,
+    stats: {
+      sacks: 4,
+      interceptions: 1,
+      fumble_recoveries: 0,
+      defensive_touchdowns: 0,
+      return_touchdowns: 0,
+      safeties: 0,
+      blocked_kicks: 0,
+      fourth_down_stops: 2,
+      points_allowed: 13,
+      yards_allowed: 301,
+    },
+    fantasy_points: 12,
+    ...overrides,
+  });
 }
