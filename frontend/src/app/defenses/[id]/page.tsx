@@ -5,6 +5,7 @@ import PlayerStats from "@/components/PlayerStats";
 import {
   getDefense,
   getDefenseSchedule,
+  getDefenseSeason,
   getDefenseStats,
   getScoringPreset,
 } from "@/lib/api";
@@ -28,10 +29,11 @@ export default async function DefenseDetailPage({
     notFound();
   }
 
-  const [stats, schedule, scoring] = await Promise.all([
+  const [stats, schedule, scoring, season] = await Promise.all([
     getDefenseStats(teamId, GAME_LOG_LIMIT),
     getDefenseSchedule(teamId),
     getScoringPreset("NFL"),
+    getDefenseSeason(teamId),
   ]);
 
   return (
@@ -56,7 +58,7 @@ export default async function DefenseDetailPage({
         Back to players
       </Link>
 
-      <DefenseHero defense={defense} entries={stats ?? []} />
+      <DefenseHero defense={defense} entries={stats ?? []} season={season} />
       <PlayerStats
         key={defense.id}
         sport="NFL"
