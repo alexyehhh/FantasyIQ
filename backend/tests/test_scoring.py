@@ -24,6 +24,7 @@ from app.services.scoring import (
     bracket_points,
     default_config,
     kick_points,
+    resolve_scoring,
     score_defense_game,
     score_player_game,
 )
@@ -331,3 +332,31 @@ def test_ranking_under_a_custom_config_changes_the_points_and_the_order(db):
 def test_a_config_for_the_wrong_sport_cannot_rank_players(db):
     with pytest.raises(ValueError, match="can't rank"):
         players_service.list_players(db, sport="NFL", sort="fantasy_points", scoring=NBA)
+
+
+# --- The request's `scoring` parameter -------------------------------------------------------
+
+
+def test_scoring_defaults_to_the_sports_fantasyiq_preset():
+    assert resolve_scoring(None, "NFL") is NFL
+    assert resolve_scoring("default", "NBA") is NBA
+
+
+def test_scoring_accepts_an_inline_json_config():
+    spec = '{"name": "Points only", "sport": "NBA", "player_weights": {"points": 1}}'
+
+    config = resolve_scoring(spec, "NBA")
+
+    assert config.name == "Points only"
+    assert score_player_game(config, {"points": 10, "rebounds": 10}) == 10
+
+
+def test_scoring_rejects_an_unknown_preset_a_bad_config_and_the_wrong_sport():
+    with pytest.raises(ValueError, match="Unknown scoring preset"):
+        resolve_scoring("standard", "NFL")
+    with pytest.raises(ValueError, match="unknown NBA player stats"):
+        resolve_scoring('{"name": "Typo", "sport": "NBA", "player_weights": {"pointz": 1}}', "NBA")
+    with pytest.raises(ValueError, match="can't score NFL"):
+        resolve_scoring('{"name": "NBA league", "sport": "NBA"}', "NFL")
+    with pytest.raises(ValueError):
+        resolve_scoring("{not json", "NFL")
