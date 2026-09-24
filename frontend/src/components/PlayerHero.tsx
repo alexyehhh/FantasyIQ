@@ -1,4 +1,11 @@
-import type { NextGame, PlayerDetail, PlayerGameStatsEntry, Sport } from "@/lib/api";
+import type {
+  NextGame,
+  PlayerDetail,
+  PlayerGameStatsEntry,
+  RankedStat,
+  SeasonSummary,
+  Sport,
+} from "@/lib/api";
 import { formatGameDateTime } from "@/lib/format";
 import { displayPosition } from "@/lib/positions";
 import {
@@ -17,9 +24,11 @@ interface PlayerHeroProps {
   player: PlayerDetail;
   /** Most recent game first, as the API returns them. */
   entries: PlayerGameStatsEntry[];
+  /** Season totals with ranks; without it the tiles show last-10 averages instead. */
+  season?: SeasonSummary | null;
 }
 
-export default function PlayerHero({ player, entries }: PlayerHeroProps) {
+export default function PlayerHero({ player, entries, season = null }: PlayerHeroProps) {
   const team = player.team;
   const profile = profileFor(player.sport, player.position);
   const byeWeek = team?.bye_week ?? null;
@@ -78,6 +87,7 @@ export default function PlayerHero({ player, entries }: PlayerHeroProps) {
           entries={entries}
           tiles={[FPTS, ...profile.tiles]}
           negativeStats={profile.negativeStats}
+          season={season}
         />
       )}
     </section>
@@ -125,11 +135,14 @@ export function Tiles({
   entries,
   tiles,
   negativeStats,
+  season = null,
 }: {
   sport: Sport;
   entries: PlayerGameStatsEntry[];
   tiles: string[];
   negativeStats: ReadonlySet<string>;
+  /** When given, each tile shows the season total and its rank instead of the last-10 average. */
+  season?: SeasonSummary | null;
 }) {
   const total = entries.length;
 
@@ -143,6 +156,7 @@ export function Tiles({
         const flat = Math.abs(change) < 0.05;
         const label = STAT_LABELS[key];
         const first = index === 0;
+        const ranked = season?.stats[key === FPTS ? "fantasy_points" : key] ?? null;
 
         return (
           <div
@@ -158,7 +172,7 @@ export function Tiles({
             <div className="text-[11.5px] font-bold uppercase tracking-[0.08em] text-ink-2">
               {key === FPTS || sport === "NFL" ? label.name : label.abbr}{" "}
               <span className="font-semibold normal-case tracking-normal text-ink-3">
-                · L10 avg
+                {ranked ? "· Season" : "· L10 avg"}
               </span>
             </div>
             <div
@@ -166,10 +180,12 @@ export function Tiles({
                 first ? "text-[52px] text-accent" : "text-[44px]"
               }`}
             >
-              {total === 0 ? "—" : formatStat(last10)}
+              {ranked ? formatStat(ranked.total) : total === 0 ? "—" : formatStat(last10)}
             </div>
             <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-3">
-              {total < 2 ? (
+              {ranked && season ? (
+                <RankLine ranked={ranked} season={season} />
+              ) : total < 2 ? (
                 <span>{total === 0 ? "No games yet" : "1 game played"}</span>
               ) : (
                 <>
@@ -192,5 +208,25 @@ export function Tiles({
         );
       })}
     </div>
+  );
+}
+
+/** Where a season total ranks among the same position: "#3 of 32 QB", "T-#1" when tied. */
+function RankLine({ ranked, season }: { ranked: RankedStat; season: SeasonSummary }) {
+  const top = ranked.rank <= 5;
+
+  return (
+    <>
+      <span
+        className={`rounded-full px-[7px] py-px text-xs font-bold ${
+          top ? "bg-good-soft text-good" : "bg-surface-2 text-ink-2"
+        }`}
+      >
+        {ranked.tied ? "T-" : ""}#{ranked.rank}
+      </span>
+      <span>
+        of {season.pool_size} {displayPosition(season.position_group)}
+      </span>
+    </>
   );
 }
