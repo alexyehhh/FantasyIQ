@@ -17,7 +17,13 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.models import Game, Player, PlayerGameStats, Team
 from data_pipeline.espn import ESPNClient, ESPNError
-from data_pipeline.espn_common import IngestionError, TeamPayload
+from data_pipeline.espn_common import (
+    IngestionError,
+    TeamPayload,
+    competitor_score,
+    season_label,
+    team_external_id,
+)
 from data_pipeline.espn_common import status_state as _status_state
 from data_pipeline.espn_common import team_payload as _team_payload
 
@@ -31,6 +37,8 @@ class GamePayload(BaseModel):
     status_state: str = Field(pattern=r"^(scheduled|in_progress|final)$")
     home_team: TeamPayload
     visitor_team: TeamPayload
+    home_score: int | None = None
+    visitor_score: int | None = None
 
 
 class PlayerPayload(BaseModel):
@@ -82,7 +90,7 @@ def _parse_minutes(value: str | int | float | None) -> float:
 
 
 def _season_label(season: int) -> str:
-    return f"{season}-{str(season + 1)[-2:]}"
+    return season_label("NBA", season)
 
 
 def _stat_value(values: dict[str, Any], keys: tuple[str, ...]) -> Any:
@@ -90,6 +98,16 @@ def _stat_value(values: dict[str, Any], keys: tuple[str, ...]) -> Any:
         if key in values:
             return values[key]
     return 0
+
+
+def _attempts(value: Any) -> int:
+    """Attempts from ESPN's "made-attempted" shooting string ("9-17" -> 17).
+
+    Also accepts a bare attempts number, which is how the older payloads sent it.
+    """
+    if isinstance(value, str) and "-" in value:
+        return int(value.partition("-")[2] or 0)
+    return int(value or 0)
 
 
 def _stats_payload(raw: dict[str, Any], team_id: int, key_names: list[str]) -> StatsPayload:
@@ -105,8 +123,21 @@ def _stats_payload(raw: dict[str, Any], team_id: int, key_names: list[str]) -> S
         stl=int(_stat_value(values, ("STL", "steals")) or 0),
         blk=int(_stat_value(values, ("BLK", "blocks")) or 0),
         turnover=int(_stat_value(values, ("TO", "turnovers")) or 0),
-        fga=int(_stat_value(values, ("FGA", "fieldGoalsAttempted")) or 0),
-        fg3a=int(_stat_value(values, ("3PA", "threePointersAttempted")) or 0),
+        fga=_attempts(
+            _stat_value(
+                values, ("FGA", "fieldGoalsAttempted", "fieldGoalsMade-fieldGoalsAttempted")
+            )
+        ),
+        fg3a=_attempts(
+            _stat_value(
+                values,
+                (
+                    "3PA",
+                    "threePointersAttempted",
+                    "threePointFieldGoalsMade-threePointFieldGoalsAttempted",
+                ),
+            )
+        ),
         player=PlayerPayload(
             id=int(athlete["id"]),
             first_name=athlete.get("firstName") or athlete["displayName"].split()[0],
@@ -151,6 +182,8 @@ class ESPNNBAClient:
                 status_state=_status_state(header),
                 home_team=home_team,
                 visitor_team=visitor_team,
+                home_score=competitor_score(home),
+                visitor_score=competitor_score(visitor),
             )
             stats: list[StatsPayload] = []
             for team_box in raw.get("boxscore", {}).get("players", []):
@@ -169,9 +202,10 @@ class ESPNNBAClient:
 
 
 def _upsert_team(db: Session, payload: TeamPayload) -> Team:
-    team = db.scalar(select(Team).where(Team.external_id == str(payload.id)))
+    external_id = team_external_id("NBA", payload.id)
+    team = db.scalar(select(Team).where(Team.external_id == external_id))
     if team is None:
-        team = Team(external_id=str(payload.id), sport="NBA")
+        team = Team(external_id=external_id, sport="NBA")
         db.add(team)
     team.name = payload.full_name
     team.abbreviation = payload.abbreviation
@@ -193,16 +227,25 @@ def ingest_game(db: Session, game: GamePayload, stats: list[StatsPayload]) -> in
     record.away_team_id = away_team.id
     record.start_time = game.datetime
     record.status = game.status_state
+    record.home_score = game.home_score
+    record.away_score = game.visitor_score
     db.flush()
     for stat in stats:
         player = db.scalar(select(Player).where(Player.external_id == str(stat.player.id)))
         if player is None:
-            player = Player(external_id=str(stat.player.id), sport="NBA")
+            # A box score only says who a player played for that day, so it seeds a brand-new
+            # player but never overwrites the current team/position/status, which the roster
+            # sync (data_pipeline/espn_directory.py) owns. Otherwise ingesting an old game
+            # would move a traded player back to his former team.
+            player = Player(
+                external_id=str(stat.player.id),
+                sport="NBA",
+                position=stat.player.position,
+                team_id=home_team.id if stat.player.team_id == game.home_team.id else away_team.id,
+                active=True,
+            )
             db.add(player)
         player.name = f"{stat.player.first_name} {stat.player.last_name}"
-        player.position = stat.player.position
-        player.team_id = home_team.id if stat.player.team_id == game.home_team.id else away_team.id
-        player.active = True
         db.flush()
         line = db.scalar(select(PlayerGameStats).where(
             PlayerGameStats.player_id == player.id, PlayerGameStats.game_id == record.id
