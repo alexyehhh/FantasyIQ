@@ -7,23 +7,28 @@ player can appear in more than one category (a QB who also rushed).
 Stats are therefore gathered per athlete across every category for
 their team before being validated, rather than parsed group-by-group
 like the NBA pipeline.
+
+Field goal distances are not in the box score, so each kick is read from the
+game's play-by-play and attributed to a kicker. The kicks must add up to every
+kicker's box-score FG line or the game is rejected as inconsistent.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Game, Player, PlayerGameStatsNFL, Team
+from app.db.models import FieldGoalKick, Game, Player, PlayerGameStatsNFL, Team
 from data_pipeline.espn import ESPNClient, ESPNError
 from data_pipeline.espn_common import (
     IngestionError,
@@ -77,7 +82,35 @@ class StatsPayload(BaseModel):
     receiving_yards: int = Field(default=0)
     receiving_touchdowns: int = Field(default=0, ge=0)
     fumbles_lost: int = Field(default=0, ge=0)
+    field_goals_made: int = Field(default=0, ge=0)
+    field_goal_attempts: int = Field(default=0, ge=0)
+    extra_points_made: int = Field(default=0, ge=0)
+    extra_point_attempts: int = Field(default=0, ge=0)
+    kick_return_touchdowns: int = Field(default=0, ge=0)
+    punt_return_touchdowns: int = Field(default=0, ge=0)
     player: PlayerPayload
+
+    @model_validator(mode="after")
+    def _made_kicks_cannot_exceed_attempts(self) -> StatsPayload:
+        for made, attempted, name in (
+            (self.passing_completions, self.passing_attempts, "completions"),
+            (self.field_goals_made, self.field_goal_attempts, "field goals"),
+            (self.extra_points_made, self.extra_point_attempts, "extra points"),
+        ):
+            if made > attempted:
+                raise ValueError(f"{name} made ({made}) exceeds attempted ({attempted})")
+        return self
+
+
+class KickPayload(BaseModel):
+    """One field goal attempt, attributed to the kicker who took it."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    play_id: str = Field(min_length=1, max_length=64)
+    kicker_id: int = Field(gt=0)
+    distance: int = Field(ge=1, le=99)
+    result: str = Field(pattern=r"^(made|missed|blocked)$")
 
 
 def _season_label(season: int) -> str:
@@ -92,7 +125,10 @@ def _int(value: Any) -> int:
 
 
 def _split_completions_attempts(value: Any) -> tuple[int, int]:
-    """ESPN reports passing completions/attempts as one "C/ATT" string."""
+    """ESPN reports made/attempted pairs as one "made/attempted" string.
+
+    Passing is "24/37" (C/ATT), and the kicking group's FG and XP are the same shape.
+    """
     if isinstance(value, str) and "/" in value:
         completions, _, attempts = value.partition("/")
         return _int(completions), _int(attempts)
@@ -130,8 +166,13 @@ def _stats_payload(athlete_id: int, bucket: dict[str, Any], team_id: int) -> Sta
     rushing = categories.get("rushing", {})
     receiving = categories.get("receiving", {})
     fumbles = categories.get("fumbles", {})
+    kicking = categories.get("kicking", {})
+    kick_returns = categories.get("kickReturns", {})
+    punt_returns = categories.get("puntReturns", {})
 
     completions, attempts = _split_completions_attempts(passing.get("C/ATT"))
+    field_goals_made, field_goal_attempts = _split_completions_attempts(kicking.get("FG"))
+    extra_points_made, extra_point_attempts = _split_completions_attempts(kicking.get("XP"))
     position = athlete.get("position", {})
     return StatsPayload(
         id=athlete_id,
@@ -148,6 +189,12 @@ def _stats_payload(athlete_id: int, bucket: dict[str, Any], team_id: int) -> Sta
         receiving_yards=_int(receiving.get("YDS")),
         receiving_touchdowns=_int(receiving.get("TD")),
         fumbles_lost=_int(fumbles.get("LOST")),
+        field_goals_made=field_goals_made,
+        field_goal_attempts=field_goal_attempts,
+        extra_points_made=extra_points_made,
+        extra_point_attempts=extra_point_attempts,
+        kick_return_touchdowns=_int(kick_returns.get("TD")),
+        punt_return_touchdowns=_int(punt_returns.get("TD")),
         player=PlayerPayload(
             id=athlete_id,
             first_name=athlete.get("firstName") or athlete["displayName"].split()[0],
@@ -157,6 +204,90 @@ def _stats_payload(athlete_id: int, bucket: dict[str, Any], team_id: int) -> Sta
             team_id=team_id,
         ),
     )
+
+
+_KICK_RESULTS = {
+    "Field Goal Good": "made",
+    "Field Goal Missed": "missed",
+    "Blocked Field Goal": "blocked",
+}
+_KICK_TEXT = re.compile(r"^\s*(?P<kicker>[A-Z]\.[^\d]+?) (?P<distance>\d+) yard field goal")
+
+
+def _short_name(athlete: dict[str, Any]) -> str:
+    """The "D.Zvada" form play text uses for a player."""
+    first = athlete.get("firstName") or athlete["displayName"].split()[0]
+    last = athlete.get("lastName") or " ".join(athlete["displayName"].split()[1:])
+    return f"{first[0]}.{last}"
+
+
+def _kickers_by_team(raw: dict[str, Any]) -> dict[int, dict[int, str]]:
+    """Each team's kickers from the box score's kicking group: team -> athlete id -> "D.Zvada"."""
+    kickers: dict[int, dict[int, str]] = {}
+    for team_box in raw.get("boxscore", {}).get("players", []):
+        team_id = int(team_box["team"]["id"])
+        for group in team_box.get("statistics", []):
+            if group.get("name") != "kicking":
+                continue
+            for entry in group.get("athletes", []):
+                athlete = entry.get("athlete", entry)
+                kickers.setdefault(team_id, {})[int(athlete["id"])] = _short_name(athlete)
+    return kickers
+
+
+def _parse_kicks(raw: dict[str, Any], stats: list[StatsPayload]) -> list[KickPayload] | None:
+    """Every field goal attempt in the game's plays, or None when it has no play data.
+
+    Distance is the play's `statYardage`; a blocked kick reports 0 there, so its distance
+    comes from the play text. The kicking team is the play's `start.team` (`teamParticipants`
+    lists both teams). Raises IngestionError when a kick cannot be attributed or the kicks do
+    not add up to the box score, rather than storing a distance-scored line that is wrong.
+    """
+    drives = raw.get("drives")
+    if not isinstance(drives, dict):
+        return None
+    all_drives = list(drives.get("previous", []))
+    if isinstance(drives.get("current"), dict):
+        all_drives.append(drives["current"])
+
+    kickers = _kickers_by_team(raw)
+    kicks: list[KickPayload] = []
+    for drive in all_drives:
+        for play in drive.get("plays", []):
+            result = _KICK_RESULTS.get(play.get("type", {}).get("text"))
+            if result is None:
+                continue
+            match = _KICK_TEXT.match(play.get("text", ""))
+            distance = play.get("statYardage") or (match and int(match["distance"]))
+            team_kickers = kickers.get(int(play["start"]["team"]["id"]), {})
+            named = [
+                athlete_id
+                for athlete_id, short in team_kickers.items()
+                if match and short == match["kicker"]
+            ]
+            candidates = named or list(team_kickers)
+            if len(candidates) != 1 or not distance:
+                raise IngestionError(f"Cannot attribute field goal play {play.get('id')}")
+            kicks.append(
+                KickPayload(
+                    play_id=str(play["id"]),
+                    kicker_id=candidates[0],
+                    distance=distance,
+                    result=result,
+                )
+            )
+
+    for stat in stats:
+        own = [kick for kick in kicks if kick.kicker_id == stat.id]
+        if (sum(k.result == "made" for k in own), len(own)) != (
+            stat.field_goals_made,
+            stat.field_goal_attempts,
+        ):
+            raise IngestionError(
+                f"Field goal plays for athlete {stat.id} do not match the box score "
+                f"({stat.field_goals_made}/{stat.field_goal_attempts})"
+            )
+    return kicks
 
 
 class ESPNNFLClient:
@@ -169,7 +300,7 @@ class ESPNNFLClient:
 
     def get_game(
         self, event_id: str, summary_payload: dict[str, Any] | None = None
-    ) -> tuple[GamePayload, list[StatsPayload]]:
+    ) -> tuple[GamePayload, list[StatsPayload], list[KickPayload] | None]:
         try:
             raw = summary_payload or (
                 self._summary_factory(event_id)
@@ -200,10 +331,20 @@ class ESPNNFLClient:
                 team_id = int(team_box["team"]["id"])
                 for athlete_id, bucket in _group_athletes_by_id(team_box).items():
                     stats.append(_stats_payload(athlete_id, bucket, team_id))
-            return game, stats
-        except (ESPNError, KeyError, StopIteration, TypeError, ValueError, ValidationError) as exc:
+            return game, stats, _parse_kicks(raw, stats)
+        except (
+            ESPNError,
+            IngestionError,
+            KeyError,
+            StopIteration,
+            TypeError,
+            ValueError,
+            ValidationError,
+        ) as exc:
             if isinstance(exc, ESPNError):
                 raise IngestionError("ESPN rejected or could not serve the NFL summary") from exc
+            if isinstance(exc, IngestionError):
+                raise
             raise IngestionError("Invalid ESPN NFL summary payload") from exc
 
 
@@ -219,7 +360,12 @@ def _upsert_team(db: Session, payload: TeamPayload) -> Team:
     return team
 
 
-def ingest_game(db: Session, game: GamePayload, stats: list[StatsPayload]) -> int:
+def ingest_game(
+    db: Session,
+    game: GamePayload,
+    stats: list[StatsPayload],
+    kicks: list[KickPayload] | None = None,
+) -> int:
     home_team = _upsert_team(db, game.home_team)
     away_team = _upsert_team(db, game.visitor_team)
     db.flush()
@@ -272,8 +418,38 @@ def ingest_game(db: Session, game: GamePayload, stats: list[StatsPayload]) -> in
         line.receiving_yards = stat.receiving_yards
         line.receiving_touchdowns = stat.receiving_touchdowns
         line.fumbles_lost = stat.fumbles_lost
+        line.field_goals_made = stat.field_goals_made
+        line.field_goal_attempts = stat.field_goal_attempts
+        line.extra_points_made = stat.extra_points_made
+        line.extra_point_attempts = stat.extra_point_attempts
+        line.kick_return_touchdowns = stat.kick_return_touchdowns
+        line.punt_return_touchdowns = stat.punt_return_touchdowns
     db.flush()
+    if kicks is not None:
+        _sync_kicks(db, record, kicks)
     return len(stats)
+
+
+def _sync_kicks(db: Session, game: Game, kicks: list[KickPayload]) -> None:
+    """Make the game's stored kicks mirror the payload: upsert by play id, drop stale ones."""
+    kept: set[str] = set()
+    for kick in kicks:
+        player = db.scalar(select(Player).where(Player.external_id == str(kick.kicker_id)))
+        row = db.scalar(
+            select(FieldGoalKick).where(FieldGoalKick.external_play_id == kick.play_id)
+        )
+        if row is None:
+            row = FieldGoalKick(external_play_id=kick.play_id)
+            db.add(row)
+        row.player_id = player.id
+        row.game_id = game.id
+        row.distance = kick.distance
+        row.result = kick.result
+        kept.add(kick.play_id)
+    for stale in db.scalars(select(FieldGoalKick).where(FieldGoalKick.game_id == game.id)):
+        if stale.external_play_id not in kept:
+            db.delete(stale)
+    db.flush()
 
 
 def run(game_id: str, summary_payload: dict[str, Any] | None = None) -> int:
@@ -283,8 +459,8 @@ def run(game_id: str, summary_payload: dict[str, Any] | None = None) -> int:
     client = ESPNNFLClient(settings.nfl_api_timeout_seconds)
     db = SessionLocal()
     try:
-        game, stats = client.get_game(game_id, summary_payload)
-        count = ingest_game(db, game, stats)
+        game, stats, kicks = client.get_game(game_id, summary_payload)
+        count = ingest_game(db, game, stats, kicks)
         db.commit()
         return count
     except Exception:
