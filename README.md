@@ -129,6 +129,24 @@ ESPN only reports NBA positions as G/F/C, not PG/SG/SF/PF; NFL positions are
 specific. A game log's opponent and result are worked out from the player's
 *current* team, so games played for a former team show no opponent.
 
+### Bulk game ingestion
+
+The directory sync records every game and marks it final once it's played; this job
+loads the box score for each finished game that doesn't have one yet, so you don't
+have to look up ESPN event IDs. Run it after the directory sync (weekly is plenty in
+the NFL season):
+
+```bash
+docker-compose exec backend python -m data_pipeline.backfill --sport all
+```
+
+`--sport` takes `NBA`, `NFL` or `all` (default). `--reingest` reloads games that already
+have stats too, which is how a newly added stat column gets filled in for old games.
+`--limit N` caps the games per sport and `--delay` sets the pause between ESPN requests
+(default 0.5 seconds). A game that fails (ESPN error, or a payload that doesn't reconcile
+with its box score) is listed and skipped, the rest still run, and the exit code is 1 if
+anything failed. Every ingest upserts, so re-running is always safe.
+
 ### Player API
 
 With data ingested (or seeded — see below), the backend exposes read
@@ -167,8 +185,8 @@ called by both this API and, later, the AI tool layer.
 
 With the backend running and the directory synced, `/players` is a search page
 that opens on NFL (NFL/NBA toggle) with position buttons: QB, RB, WR, TE, W/R/T
-(any RB, WR or TE), K and DEF (shown but disabled: team defenses aren't tracked
-yet) for the NFL, and G, F, C and Util (everyone) for the NBA. ESPN reports NBA
+(any RB, WR or TE), K and DEF (shown but disabled: team defense stats are stored
+but there's no team page or scoring for them yet) for the NFL, and G, F, C and Util (everyone) for the NBA. ESPN reports NBA
 positions only as G/F/C, so PG/SG/SF/PF eligibility has to wait for Yahoo. Players
 are ranked by fantasy points, most first, 50 to a page with Previous 50 / Next 50
 buttons that scroll back to the top of the page; a search or position change
@@ -201,6 +219,19 @@ kicker's box-score FG line. Games ingested before the stat tables were widened r
 for the new columns (NBA makes and free throws, NFL kicking and return touchdowns) and
 have no kick rows until they are re-ingested; re-running `nba_ingest`/`nfl_ingest` for
 a game is safe.
+
+NFL ingestion also stores each team's defense/special teams line per game
+(`team_game_stats_nfl`): sacks, interceptions, fumble recoveries, safeties, blocked
+kicks, defensive touchdowns, kick/punt return touchdowns, 4th-down stops, yards allowed
+and points allowed. They come from the opponent's box-score totals and the drive
+results, defined as Yahoo scores a D/ST: points allowed leave out interception and
+fumble return touchdowns (with their extra points) and safeties, while kick and punt
+return touchdowns still count against the team. Ingestion cross-checks the drives
+against the box score's defensive touchdown and safety counts, and rejects a game it
+can't explain rather than store a wrong points-allowed figure. Not stored yet, for lack
+of a real sample to verify against: extra points returned by the defense, blocked extra
+points, and three-and-outs. Like the kicks, these rows exist only for games ingested
+since the table was added.
 
 Fantasy points use FantasyIQ's default scoring, which only needs stats already
 stored. The weights live in both `backend/app/services/scoring.py` (for the
