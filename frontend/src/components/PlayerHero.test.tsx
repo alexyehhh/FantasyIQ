@@ -38,11 +38,19 @@ describe("PlayerHero", () => {
     expect(screen.queryByText(/Bye week/)).not.toBeInTheDocument();
   });
 
-  it("writes a kicker's position as K and shows no stat tiles for them", () => {
+  it("writes a kicker's position as K and shows field goal tiles for them", () => {
     const player = makePlayerDetail({ sport: "NFL", position: "PK" });
     render(<PlayerHero player={player} entries={[]} />);
 
     expect(screen.getByText("K")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Fantasy pts" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Field goals made" })).toBeInTheDocument();
+  });
+
+  it("shows no stat tiles for a punter, whose stats aren't tracked", () => {
+    const player = makePlayerDetail({ sport: "NFL", position: "P" });
+    render(<PlayerHero player={player} entries={[]} />);
+
     expect(screen.queryByRole("group", { name: "Fantasy pts" })).not.toBeInTheDocument();
   });
 
