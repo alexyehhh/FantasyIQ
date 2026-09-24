@@ -196,6 +196,9 @@ example
 GET /api/v1/players/123/stats?scoring={"name":"Flat kicker","sport":"NFL","player_weights":{"field_goals_made":3}}
 ```
 
+`GET /api/v1/scoring/presets/{sport}` returns the default config itself (weights and
+brackets), which is what the frontend describes under a game log.
+
 An invalid config, an unknown preset, or a config for the other sport is a `422` that says
 why. Choosing a `scoring` on the players list needs a `sport`. The JSON travels in the URL,
 so it suits a config of a few hundred bytes; saved per-league configs will replace that once
@@ -213,8 +216,8 @@ the player ones.
 
 With the backend running and the directory synced, `/players` is a search page
 that opens on NFL (NFL/NBA toggle) with position buttons: QB, RB, WR, TE, W/R/T
-(any RB, WR or TE), K and DEF (shown but disabled: team defense stats are stored
-but there's no team page or scoring for them yet) for the NFL, and G, F, C and Util (everyone) for the NBA. ESPN reports NBA
+(any RB, WR or TE), K and DEF (team defenses, ranked the same way and linking to
+`/defenses/{team_id}`) for the NFL, and G, F, C and Util (everyone) for the NBA. ESPN reports NBA
 positions only as G/F/C, so PG/SG/SF/PF eligibility has to wait for Yahoo. Players
 are ranked by fantasy points, most first, 50 to a page with Previous 50 / Next 50
 buttons that scroll back to the top of the page; a search or position change
@@ -237,16 +240,15 @@ fantasy points and injury status and link to `/players/{id}`. A player page show
   still has games to come, so it moves on to games 21–40 once the first 20 are
   played.
 
-Kickers and punters show their schedule but no stats yet. Field goals and extra
-points (made and attempted) are stored per game, and NFL ingestion also stores every
-field goal attempt with its distance and result (`field_goal_kicks`, one row per
-play), read from the game's play-by-play because distance isn't in the box score.
-The page and the default scoring don't use them yet, so there are no fantasy points
-for kickers until they do. Ingestion rejects a game whose kicks don't add up to each
-kicker's box-score FG line. Games ingested before the stat tables were widened read 0
-for the new columns (NBA makes and free throws, NFL kicking and return touchdowns) and
-have no kick rows until they are re-ingested; re-running `nba_ingest`/`nfl_ingest` for
-a game is safe.
+A kicker's page shows field goals and extra points (made and attempted), fantasy points,
+and each game's kicks in the log as distances ("24, 52, 43 (miss)"). NFL ingestion stores
+every field goal attempt with its distance and result (`field_goal_kicks`, one row per
+play), read from the game's play-by-play because distance isn't in the box score, and
+rejects a game whose kicks don't add up to each kicker's box-score FG line. Punters show
+only their schedule (no punting stats are stored), and the players list shows a dash for
+their points. Games ingested before the stat tables were widened read 0 for the new
+columns (NBA makes and free throws, NFL kicking and return touchdowns) and have no kick
+rows until they are re-ingested (`python -m data_pipeline.backfill --reingest`).
 
 NFL ingestion also stores each team's defense/special teams line per game
 (`team_game_stats_nfl`): sacks, interceptions, fumble recoveries, safeties, blocked
@@ -261,13 +263,14 @@ of a real sample to verify against: extra points returned by the defense, blocke
 points, and three-and-outs. Like the kicks, these rows exist only for games ingested
 since the table was added.
 
-Fantasy points use FantasyIQ's default scoring. The list ranking uses the backend's
-`ScoringConfig` (`backend/app/services/scoring.py`), while the game log still scores
-individual games with its own copy of the default player weights in
-`frontend/src/lib/scoring.ts`; tests on both sides pin the same worked examples. That
-copy doesn't know about the return-touchdown and extra-point weights added to the
-backend default, and is to be replaced by points computed by the backend. Game dates and times are shown in US
-Pacific time. All backend calls go through `frontend/src/lib/api.ts`.
+Fantasy points come from the backend, under FantasyIQ's default scoring: each game in
+a player's or defense's stats carries `fantasy_points`, and the game log's "FPTS uses ..."
+note is written from the config served by `GET /api/v1/scoring/presets/{sport}`, so the
+weights exist in one place only. A team defense has its own page at `/defenses/{team_id}`
+with the same layout as a player's (header with the bye week and next game, chart,
+averages, consistency, game log), with sacks, takeaways, scores and points and yards
+allowed as its stats. Game dates and times are shown in US Pacific time. All backend
+calls go through `frontend/src/lib/api.ts`.
 
 ### Fantasy scoring config
 
