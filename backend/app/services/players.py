@@ -7,7 +7,8 @@ the AI tool layer both call these functions rather than querying the
 DB directly.
 """
 
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from sqlalchemy import Select, Subquery, and_, case, func, or_, select
@@ -26,6 +27,7 @@ from app.services.scoring import (
     bracket_case,
     default_config,
     player_points_expression,
+    score_player_game,
 )
 
 # Which stats table a player's game log comes from depends on their sport.
@@ -206,9 +208,11 @@ class Matchup:
 
 @dataclass
 class GameLogRow(Matchup):
-    """One played game: the matchup plus the player's stat line."""
+    """One played game: the matchup plus the player's stat line and, for an NFL kicker, the
+    field goal attempts as (distance, result) in the order they were kicked."""
 
     stats_row: object = None
+    kicks: list[tuple[int, str]] = field(default_factory=list)
 
 
 def _matchup(game: Game, team_id: int | None, teams: dict[int, Team]) -> Matchup:
@@ -250,11 +254,33 @@ def get_player_game_log(
         query = query.limit(limit)
     rows = list(db.execute(query).all())
 
+    kicks_by_game: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    if player.sport == "NFL" and rows:
+        kicks = db.scalars(
+            select(FieldGoalKick)
+            .where(
+                FieldGoalKick.player_id == player.id,
+                FieldGoalKick.game_id.in_([game.id for _, game in rows]),
+            )
+            .order_by(FieldGoalKick.external_play_id)
+        )
+        for kick in kicks:
+            kicks_by_game[kick.game_id].append((kick.distance, kick.result))
+
     teams = _teams_for(db, [game for _, game in rows])
     return [
-        GameLogRow(**vars(_matchup(game, player.team_id, teams)), stats_row=stats_row)
+        GameLogRow(
+            **vars(_matchup(game, player.team_id, teams)),
+            stats_row=stats_row,
+            kicks=kicks_by_game.get(game.id, []),
+        )
         for stats_row, game in rows
     ]
+
+
+def game_fantasy_points(config: ScoringConfig, row: GameLogRow) -> float:
+    """The player's fantasy points for one game of their log under `config`."""
+    return score_player_game(config, serialize_stats_row(row.stats_row), row.kicks)
 
 
 # Fantasy seasons end in week 17; ESPN's 18th NFL week isn't played for fantasy.
@@ -262,17 +288,20 @@ _LAST_FANTASY_WEEK = 17
 
 
 def get_player_schedule(db: Session, player: Player) -> list[Matchup]:
-    """The player's team's games this season, played and upcoming, in date order.
+    """The player's team's games this season, played and upcoming, in date order."""
+    if player.team_id is None:
+        return []
+    return get_team_schedule(db, player.team_id, player.sport)
+
+
+def get_team_schedule(db: Session, team_id: int, sport: str) -> list[Matchup]:
+    """A team's games this season, played and upcoming, in date order.
 
     "This season" is the season of the next game, or of the latest game once the
     schedule has run out. NFL schedules stop at the last fantasy week.
     """
-    if player.team_id is None:
-        return []
-    involves_team = or_(
-        Game.home_team_id == player.team_id, Game.away_team_id == player.team_id
-    )
-    upcoming = get_next_game(db, player)
+    involves_team = or_(Game.home_team_id == team_id, Game.away_team_id == team_id)
+    upcoming = get_team_next_game(db, team_id)
     season = (
         upcoming[0].season
         if upcoming
@@ -284,28 +313,35 @@ def get_player_schedule(db: Session, player: Player) -> list[Matchup]:
         return []
 
     query = select(Game).where(involves_team, Game.season == season)
-    if player.sport == "NFL":
+    if sport == "NFL":
         query = query.where(or_(Game.week.is_(None), Game.week <= _LAST_FANTASY_WEEK))
     games = list(db.scalars(query.order_by(Game.start_time)))
     teams = _teams_for(db, games)
-    return [_matchup(game, player.team_id, teams) for game in games]
+    return [_matchup(game, team_id, teams) for game in games]
 
 
 def get_next_game(
     db: Session, player: Player, *, now: datetime | None = None
 ) -> tuple[Game, Team, bool] | None:
-    """The player's team's next game: (game, opponent, player_team_is_home).
+    """The player's team's next game: (game, opponent, player_team_is_home)."""
+    if player.team_id is None:
+        return None
+    return get_team_next_game(db, player.team_id, now=now)
+
+
+def get_team_next_game(
+    db: Session, team_id: int, *, now: datetime | None = None
+) -> tuple[Game, Team, bool] | None:
+    """A team's next game: (game, opponent, team_is_home).
 
     A game that's currently in progress counts as the "next" one until it ends.
     Times are naive UTC, as stored.
     """
-    if player.team_id is None:
-        return None
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     game = db.scalars(
         select(Game)
         .where(
-            or_(Game.home_team_id == player.team_id, Game.away_team_id == player.team_id),
+            or_(Game.home_team_id == team_id, Game.away_team_id == team_id),
             or_(
                 and_(Game.status == "scheduled", Game.start_time >= now),
                 Game.status == "in_progress",
@@ -316,7 +352,7 @@ def get_next_game(
     ).first()
     if game is None:
         return None
-    is_home = game.home_team_id == player.team_id
+    is_home = game.home_team_id == team_id
     opponent = db.get(Team, game.away_team_id if is_home else game.home_team_id)
     return (game, opponent, is_home) if opponent else None
 
