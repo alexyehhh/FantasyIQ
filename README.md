@@ -157,10 +157,12 @@ GET /api/v1/players?sport=NFL&position=RB&position=WR&search=smith&sort=fantasy_
 GET /api/v1/players/{id}
 GET /api/v1/players/{id}/stats?limit=10
 GET /api/v1/players/{id}/schedule
+GET /api/v1/players/{id}/season
 GET /api/v1/defenses?search=bears&sort=fantasy_points&limit=50&offset=0
 GET /api/v1/defenses/{team_id}
 GET /api/v1/defenses/{team_id}/stats?limit=10
 GET /api/v1/defenses/{team_id}/schedule
+GET /api/v1/defenses/{team_id}/season
 ```
 
 Each player includes `team` (name, abbreviation, logo, color), `headshot_url`
@@ -225,8 +227,11 @@ also restarts at the top of the ranking. Rows have photos, teams,
 fantasy points and injury status and link to `/players/{id}`. A player page shows:
 
 - a header with the photo, team, position, number, the team's bye week (NFL),
-  health status and the team's next game, plus last-10 averages (fantasy points
-  first) with a last-5-vs-all trend;
+  health status and the team's next game, plus the season's totals for the
+  position's key stats (fantasy points first), each with its rank among players
+  at the same position ("#3 of 43 QB", "T-#5" when tied, and a green rank for the
+  top five). Last-10 averages and the last-5-vs-all trend stay in the averages
+  table and chart, and are what the tiles show if the season summary can't load;
 - the player's injury note, when there is one;
 - a bar chart (Recharts) of one stat over the last 5, 10 or all games with an
   average line, switchable between the position's key stats and fantasy points;
@@ -271,6 +276,21 @@ with the same layout as a player's (header with the bye week and next game, char
 averages, consistency, game log), with sacks, takeaways, scores and points and yards
 allowed as its stats. Game dates and times are shown in US Pacific time. All backend
 calls go through `frontend/src/lib/api.ts`.
+
+### Season totals and ranks
+
+`GET /api/v1/players/{id}/season` and `GET /api/v1/defenses/{team_id}/season` return a
+player's (or defense's) totals for the latest season with stats, each stat with its rank
+(1 = best), whether it is `tied`, and the `pool_size` it is ranked among. `stats` has every
+stat column plus `fantasy_points`, scored under the `scoring` parameter (default scoring
+when omitted). The response is `null` for a player who hasn't played yet.
+
+"The same position" follows the position filters: QB, RB (with fullbacks), WR, TE and K
+in the NFL; G, F and C in the NBA (folding in PG/SG and SF/PF); a position with no group of
+its own (a linebacker) is ranked among players with that exact code; a defense is ranked
+among the 32 defenses. Only players who actually played are ranked (an NBA row with no
+minutes doesn't count). Fewer is better for turnovers, interceptions thrown, fumbles lost,
+and a defense's points and yards allowed. The logic is in `app/services/season_summary.py`.
 
 ### Fantasy scoring config
 
