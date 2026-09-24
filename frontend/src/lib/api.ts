@@ -42,24 +42,64 @@ export async function getHealth(): Promise<HealthResponse> {
 
 export type Sport = "NBA" | "NFL";
 
+export interface TeamSummary {
+  id: number;
+  name: string;
+  abbreviation: string;
+  logo_url: string | null;
+  primary_color: string | null;
+  // NFL only: this season's bye week.
+  bye_week: number | null;
+}
+
 export interface PlayerSummary {
   id: number;
   name: string;
   sport: Sport;
   team_id: number | null;
+  team: TeamSummary | null;
   position: string | null;
   jersey_number: number | null;
   active: boolean;
+  headshot_url: string | null;
+  injury_status: string | null;
+}
+
+/** A player as listed, with fantasy points (default scoring) for the latest season with stats. */
+export interface PlayerListItem extends PlayerSummary {
+  fantasy_points: number | null;
+}
+
+export interface InjuryReport {
+  status: string;
+  type: string | null;
+  note: string | null;
+  updated_at: string | null;
+}
+
+export interface NextGame {
+  game_id: number;
+  start_time: string;
+  status: string;
+  is_home: boolean;
+  opponent: TeamSummary;
 }
 
 export interface PlayerDetail extends PlayerSummary {
   external_id: string | null;
+  height_inches: number | null;
+  weight_lbs: number | null;
+  birth_date: string | null;
+  college: string | null;
+  experience_years: number | null;
+  injury: InjuryReport | null;
+  next_game: NextGame | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface PlayerListResponse {
-  items: PlayerSummary[];
+  items: PlayerListItem[];
   total: number;
   limit: number;
   offset: number;
@@ -68,11 +108,35 @@ export interface PlayerListResponse {
 export interface PlayerGameStatsEntry {
   game_id: number;
   game_date: string;
+  week: number | null;
   stats: Record<string, number>;
+  // Relative to the player's current team; null when the game can't be tied to it.
+  opponent: TeamSummary | null;
+  is_home: boolean | null;
+  team_score: number | null;
+  opponent_score: number | null;
+  result: "W" | "L" | "T" | null;
+}
+
+/** One game on the player's team's schedule this season, played or not. */
+export interface ScheduleEntry {
+  game_id: number;
+  game_date: string;
+  status: "scheduled" | "in_progress" | "final";
+  week: number | null;
+  is_home: boolean | null;
+  opponent: TeamSummary | null;
+  team_score: number | null;
+  opponent_score: number | null;
+  result: "W" | "L" | "T" | null;
 }
 
 export interface ListPlayersParams {
   sport?: Sport;
+  /** Match any of these position codes, e.g. ["RB", "WR", "TE"]. */
+  positions?: string[];
+  /** "fantasy_points" ranks most first and needs `sport`. Defaults to name. */
+  sort?: "name" | "fantasy_points";
   teamId?: number;
   search?: string;
   limit?: number;
@@ -84,8 +148,10 @@ export async function listPlayers(
 ): Promise<PlayerListResponse> {
   const query = new URLSearchParams();
   if (params.sport) query.set("sport", params.sport);
+  for (const position of params.positions ?? []) query.append("position", position);
   if (params.teamId !== undefined) query.set("team_id", String(params.teamId));
   if (params.search) query.set("search", params.search);
+  if (params.sort) query.set("sort", params.sort);
   if (params.limit !== undefined) query.set("limit", String(params.limit));
   if (params.offset !== undefined) query.set("offset", String(params.offset));
 
@@ -129,6 +195,21 @@ export async function getPlayerStats(
   }
   if (!res.ok) {
     throw new Error(`Failed to fetch stats for player ${id}: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getPlayerSchedule(id: number): Promise<ScheduleEntry[] | null> {
+  const res = await fetch(`${apiUrl()}/api/v1/players/${id}/schedule`, {
+    cache: "no-store",
+  });
+
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`Failed to fetch schedule for player ${id}: ${res.status}`);
   }
 
   return res.json();
