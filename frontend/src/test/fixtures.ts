@@ -7,6 +7,7 @@ import type {
   PlayerSummary,
   ScheduleEntry,
   ScoringConfig,
+  SeasonSummary,
   TeamSummary,
 } from "@/lib/api";
 
@@ -199,4 +200,22 @@ export function makeDefenseEntry(
     fantasy_points: 12,
     ...overrides,
   });
+}
+
+/** A QB's season: 583 passing yards ranked 3rd of 32 QBs, tied on 2 TDs, first in fantasy points. */
+export function makeSeasonSummary(overrides: Partial<SeasonSummary> = {}): SeasonSummary {
+  return {
+    season: "2026",
+    games: 2,
+    position_group: "QB",
+    pool_size: 32,
+    stats: {
+      fantasy_points: { total: 41.5, rank: 1, tied: false },
+      passing_yards: { total: 583, rank: 3, tied: false },
+      passing_touchdowns: { total: 2, rank: 9, tied: true },
+      interceptions: { total: 1, rank: 12, tied: false },
+      rushing_yards: { total: 40, rank: 7, tied: false },
+    },
+    ...overrides,
+  };
 }
