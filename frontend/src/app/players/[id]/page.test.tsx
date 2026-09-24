@@ -79,7 +79,7 @@ describe("PlayerDetailPage", () => {
 
     await renderPage();
 
-    expect(mockedGetPlayerStats).toHaveBeenCalledWith(1, 200);
+    expect(mockedGetPlayerStats).toHaveBeenCalledWith(1, 200, "current");
   });
 
   it("lists the team's upcoming games in the game log", async () => {
