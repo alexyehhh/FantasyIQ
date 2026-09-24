@@ -23,6 +23,9 @@ class Team(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     abbreviation: Mapped[str] = mapped_column(String(10), nullable=False)
     sport: Mapped[str] = mapped_column(String(10), nullable=False)  # "NBA" | "NFL"
+    logo_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    primary_color: Mapped[str | None] = mapped_column(String(7), nullable=True)  # e.g. "#a40227"
+    bye_week: Mapped[int | None] = mapped_column(nullable=True)  # NFL only; this season's bye
 
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
