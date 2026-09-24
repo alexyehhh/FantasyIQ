@@ -191,12 +191,27 @@ export async function getPlayer(id: number): Promise<PlayerDetail | null> {
   return res.json();
 }
 
+/**
+ * Which seasons' games a stats call returns: "current" is only the season in play (empty until
+ * its first game is played, so last season's games never pose as recent form); "all" (the API's
+ * default) is every season.
+ */
+export type StatsSeason = "current" | "all";
+
+function statsQuery(limit?: number, season?: StatsSeason): string {
+  const query = new URLSearchParams();
+  if (limit !== undefined) query.set("limit", String(limit));
+  if (season) query.set("season", season);
+  const text = query.toString();
+  return text ? `?${text}` : "";
+}
+
 export async function getPlayerStats(
   id: number,
   limit?: number,
+  season?: StatsSeason,
 ): Promise<PlayerGameStatsEntry[] | null> {
-  const query = limit !== undefined ? `?limit=${limit}` : "";
-  const res = await fetch(`${apiUrl()}/api/v1/players/${id}/stats${query}`, {
+  const res = await fetch(`${apiUrl()}/api/v1/players/${id}/stats${statsQuery(limit, season)}`, {
     cache: "no-store",
   });
 
@@ -318,9 +333,9 @@ export async function getDefense(id: number): Promise<DefenseDetail | null> {
 export async function getDefenseStats(
   id: number,
   limit?: number,
+  season?: StatsSeason,
 ): Promise<DefenseGameStatsEntry[] | null> {
-  const query = limit !== undefined ? `?limit=${limit}` : "";
-  const res = await fetch(`${apiUrl()}/api/v1/defenses/${id}/stats${query}`, {
+  const res = await fetch(`${apiUrl()}/api/v1/defenses/${id}/stats${statsQuery(limit, season)}`, {
     cache: "no-store",
   });
 
