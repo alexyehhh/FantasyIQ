@@ -105,11 +105,21 @@ export interface PlayerListResponse {
   offset: number;
 }
 
+/** One field goal attempt: its distance in yards and how it ended. */
+export interface Kick {
+  distance: number;
+  result: "made" | "missed" | "blocked";
+}
+
 export interface PlayerGameStatsEntry {
   game_id: number;
   game_date: string;
   week: number | null;
   stats: Record<string, number>;
+  /** The game's fantasy points under the scoring the backend used (the sport's default). */
+  fantasy_points: number;
+  /** An NFL kicker's field goal attempts in order; absent for everyone else. */
+  kicks?: Kick[];
   // Relative to the player's current team; null when the game can't be tied to it.
   opponent: TeamSummary | null;
   is_home: boolean | null;
@@ -210,6 +220,130 @@ export async function getPlayerSchedule(id: number): Promise<ScheduleEntry[] | n
   }
   if (!res.ok) {
     throw new Error(`Failed to fetch schedule for player ${id}: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+/** An inclusive range of whole numbers worth `points`; a null end is open (0-19, 35+). */
+export interface Bracket {
+  min: number | null;
+  max: number | null;
+  points: number;
+}
+
+/** A league's scoring, as the backend defines it (app/services/scoring.py). */
+export interface ScoringConfig {
+  name: string;
+  sport: Sport;
+  player_weights: Record<string, number>;
+  field_goal_made: Bracket[];
+  field_goal_missed: Bracket[];
+  defense_weights: Record<string, number>;
+  points_allowed: Bracket[];
+}
+
+/** The FantasyIQ default scoring for a sport, or null if the backend can't be asked. */
+export async function getScoringPreset(sport: Sport): Promise<ScoringConfig | null> {
+  try {
+    const res = await fetch(`${apiUrl()}/api/v1/scoring/presets/${sport}`, {
+      cache: "no-store",
+    });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A team defense (D/ST) as listed, with fantasy points for the latest season with stats. */
+export interface DefenseListItem extends TeamSummary {
+  fantasy_points: number | null;
+}
+
+export interface DefenseListResponse {
+  items: DefenseListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DefenseDetail extends TeamSummary {
+  next_game: NextGame | null;
+}
+
+/** A defense's game line has the same shape as a player's (no `kicks`); `stats` are sacks, etc. */
+export type DefenseGameStatsEntry = PlayerGameStatsEntry;
+
+export interface ListDefensesParams {
+  search?: string;
+  /** "fantasy_points" ranks most first. Defaults to name. */
+  sort?: "name" | "fantasy_points";
+  limit?: number;
+  offset?: number;
+}
+
+export async function listDefenses(
+  params: ListDefensesParams = {},
+): Promise<DefenseListResponse> {
+  const query = new URLSearchParams();
+  if (params.search) query.set("search", params.search);
+  if (params.sort) query.set("sort", params.sort);
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.offset !== undefined) query.set("offset", String(params.offset));
+
+  const res = await fetch(`${apiUrl()}/api/v1/defenses?${query.toString()}`, {
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to list defenses: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getDefense(id: number): Promise<DefenseDetail | null> {
+  const res = await fetch(`${apiUrl()}/api/v1/defenses/${id}`, { cache: "no-store" });
+
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`Failed to fetch defense ${id}: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getDefenseStats(
+  id: number,
+  limit?: number,
+): Promise<DefenseGameStatsEntry[] | null> {
+  const query = limit !== undefined ? `?limit=${limit}` : "";
+  const res = await fetch(`${apiUrl()}/api/v1/defenses/${id}/stats${query}`, {
+    cache: "no-store",
+  });
+
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`Failed to fetch stats for defense ${id}: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getDefenseSchedule(id: number): Promise<ScheduleEntry[] | null> {
+  const res = await fetch(`${apiUrl()}/api/v1/defenses/${id}/schedule`, {
+    cache: "no-store",
+  });
+
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`Failed to fetch schedule for defense ${id}: ${res.status}`);
   }
 
   return res.json();
