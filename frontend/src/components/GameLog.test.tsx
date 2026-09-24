@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import GameLog, { describeScoring } from "./GameLog";
+import GameLog from "./GameLog";
 import { buildLogRows } from "@/lib/gameLog";
 import {
   makeEntry,
@@ -116,7 +116,7 @@ describe("GameLog", () => {
   });
 
   it("shows fantasy points as the last column", () => {
-    const entries = [makeEntry({ stats: { points: 10, assists: 2 } })];
+    const entries = [makeEntry({ stats: { points: 10, assists: 2 }, fantasy_points: 13 })];
     render(<GameLog sport="NBA" rows={rowsFor(entries)} selectedStat="points" />);
 
     expect(screen.getByRole("columnheader", { name: "FPTS" })).toBeInTheDocument();
@@ -150,12 +150,6 @@ describe("GameLog", () => {
     expect(rows[0]).toHaveTextContent("Wk 4");
     expect(rows[1]).toHaveTextContent("Week 5 · Bye");
     expect(rows[2]).toHaveTextContent("Wk 6");
-  });
-
-  it("explains how fantasy points were scored", () => {
-    render(<GameLog sport="NBA" rows={rowsFor([makeEntry()])} selectedStat="points" />);
-
-    expect(screen.getByText(/FPTS uses FantasyIQ standard scoring/)).toBeInTheDocument();
   });
 
   it("is just the schedule, with no stat columns or scoring note, when stats aren't shown", () => {
@@ -301,11 +295,23 @@ describe("GameLog", () => {
   });
 });
 
-describe("describeScoring", () => {
-  it("lists each weight, with a real minus sign for penalties", () => {
-    const text = describeScoring("NFL");
+describe("scoring note", () => {
+  it("shows the note it is given under the table", () => {
+    render(
+      <GameLog
+        sport="NFL"
+        rows={[]}
+        selectedStat="fpts"
+        scoringNote="FPTS uses Test league scoring: Receptions +1."
+      />,
+    );
 
-    expect(text).toContain("Interceptions −2");
-    expect(text).toContain("Receptions +1");
+    expect(screen.getByText("FPTS uses Test league scoring: Receptions +1.")).toBeInTheDocument();
+  });
+
+  it("shows no note when the scoring isn't known", () => {
+    render(<GameLog sport="NFL" rows={[]} selectedStat="fpts" />);
+
+    expect(screen.queryByText(/FPTS uses/)).not.toBeInTheDocument();
   });
 });
