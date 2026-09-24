@@ -11,6 +11,11 @@ like the NBA pipeline.
 Field goal distances are not in the box score, so each kick is read from the
 game's play-by-play and attributed to a kicker. The kicks must add up to every
 kicker's box-score FG line or the game is rejected as inconsistent.
+
+Team defense (D/ST) stats come from opponent box-score team totals plus the drive
+results, and are reconciled against the box score's own defensive-touchdown and
+safety counts. A score type ESPN names in a way we haven't seen fails the game loudly
+instead of silently miscounting points allowed.
 """
 
 from __future__ import annotations
@@ -28,7 +33,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import FieldGoalKick, Game, Player, PlayerGameStatsNFL, Team
+from app.db.models import (
+    FieldGoalKick,
+    Game,
+    Player,
+    PlayerGameStatsNFL,
+    Team,
+    TeamGameStatsNFL,
+)
 from data_pipeline.espn import ESPNClient, ESPNError
 from data_pipeline.espn_common import (
     IngestionError,
@@ -111,6 +123,24 @@ class KickPayload(BaseModel):
     kicker_id: int = Field(gt=0)
     distance: int = Field(ge=1, le=99)
     result: str = Field(pattern=r"^(made|missed|blocked)$")
+
+
+class TeamDefensePayload(BaseModel):
+    """One team's defense/special teams line for a game (see TeamGameStatsNFL)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    team_id: int = Field(gt=0)
+    sacks: int = Field(ge=0)
+    interceptions: int = Field(ge=0)
+    fumble_recoveries: int = Field(ge=0)
+    safeties: int = Field(ge=0)
+    blocked_kicks: int = Field(ge=0)
+    defensive_touchdowns: int = Field(ge=0)
+    return_touchdowns: int = Field(ge=0)
+    fourth_down_stops: int = Field(ge=0)
+    points_allowed: int = Field(ge=0)
+    yards_allowed: int = Field(ge=0)
 
 
 def _season_label(season: int) -> str:
@@ -290,6 +320,133 @@ def _parse_kicks(raw: dict[str, Any], stats: list[StatsPayload]) -> list[KickPay
     return kicks
 
 
+# Drive results ESPN uses when the defense scores on the offense's drive.
+_DEFENSIVE_TD_RESULTS = {"INT TD", "FUMBLE TD"}
+_SAFETY_RESULT = "SF"
+_TURNOVER_ON_DOWNS_RESULT = "DOWNS"
+_BLOCKED_KICK_PLAYS = {"Blocked Field Goal", "Blocked Punt"}
+
+
+def _team_total(team_box: dict[str, Any], name: str) -> str:
+    """A team's box-score total by ESPN's stat name (the first entry if it is listed twice)."""
+    for entry in team_box.get("statistics", []):
+        if entry.get("name") == name:
+            return str(entry["displayValue"])
+    raise IngestionError(f"Box score has no team stat {name!r}")
+
+
+def _drive_scores(
+    drives: list[dict[str, Any]], home_id: int, away_id: int
+) -> list[dict[int, int]]:
+    """Each team's running score at the end of every drive (0-0 before the first play)."""
+    scores: list[dict[int, int]] = []
+    current = {home_id: 0, away_id: 0}
+    for drive in drives:
+        plays = drive.get("plays", [])
+        if plays:
+            last = plays[-1]
+            current = {home_id: int(last["homeScore"]), away_id: int(last["awayScore"])}
+        scores.append(current)
+    return scores
+
+
+def _parse_team_defense(
+    raw: dict[str, Any], game: GamePayload, stats: list[StatsPayload]
+) -> list[TeamDefensePayload] | None:
+    """Both teams' D/ST lines, or None when the game has no play data or final score yet.
+
+    Definitions follow Yahoo's D/ST scoring (see TeamGameStatsNFL). Points allowed is the
+    opponent's score minus what it scored on defense or by safety, measured as the change in
+    the running score over the drive that produced it (so the extra point is included).
+    """
+    drives_raw = raw.get("drives")
+    team_boxes = {
+        int(box["team"]["id"]): box for box in raw.get("boxscore", {}).get("teams", [])
+    }
+    home_id, away_id = game.home_team.id, game.visitor_team.id
+    if (
+        not isinstance(drives_raw, dict)
+        or set(team_boxes) != {home_id, away_id}
+        or game.home_score is None
+        or game.visitor_score is None
+    ):
+        return None
+
+    drives = list(drives_raw.get("previous", []))
+    if isinstance(drives_raw.get("current"), dict):
+        drives.append(drives_raw["current"])
+    after = _drive_scores(drives, home_id, away_id)
+    final = {home_id: game.home_score, away_id: game.visitor_score}
+    opponent = {home_id: away_id, away_id: home_id}
+
+    def drive_team(drive: dict[str, Any]) -> int:
+        return int(drive["team"]["id"])
+
+    # Points the defense (or a safety) put on the board against each team's offense.
+    conceded: dict[int, int] = {home_id: 0, away_id: 0}
+    for index, drive in enumerate(drives):
+        result = drive.get("result")
+        if result not in _DEFENSIVE_TD_RESULTS | {_SAFETY_RESULT}:
+            continue
+        victim = drive_team(drive)
+        before = after[index - 1] if index else {home_id: 0, away_id: 0}
+        gained = after[index][opponent[victim]] - before[opponent[victim]]
+        if (result == _SAFETY_RESULT and gained != 2) or (
+            result in _DEFENSIVE_TD_RESULTS and not 6 <= gained <= 8
+        ):
+            raise IngestionError(f"Unexpected {gained}-point {result!r} score in drive")
+        conceded[victim] += gained
+
+    safeties_by_team = {home_id: 0, away_id: 0}
+    for play in raw.get("scoringPlays", []):
+        scoring_type = play.get("scoringType")
+        if isinstance(scoring_type, dict) and scoring_type.get("name") == "safety":
+            safeties_by_team[int(play["team"]["id"])] += 1
+
+    lines: list[TeamDefensePayload] = []
+    for team_id in (home_id, away_id):
+        other = opponent[team_id]
+        against = [d for d in drives if drive_team(d) == other]
+        return_tds = sum(
+            stat.kick_return_touchdowns + stat.punt_return_touchdowns
+            for stat in stats
+            if stat.player.team_id == team_id
+        )
+        defensive_tds = sum(d.get("result") in _DEFENSIVE_TD_RESULTS for d in against)
+        safeties = sum(d.get("result") == _SAFETY_RESULT for d in against)
+        if int(_team_total(team_boxes[team_id], "defensiveTouchdowns")) != (
+            defensive_tds + return_tds
+        ):
+            raise IngestionError(
+                f"Team {team_id}: defensive touchdowns in the drives do not match the box score"
+            )
+        if safeties != safeties_by_team[team_id]:
+            raise IngestionError(f"Team {team_id}: safeties in the drives do not match the plays")
+        lines.append(
+            TeamDefensePayload(
+                team_id=team_id,
+                sacks=int(_team_total(team_boxes[other], "sacksYardsLost").split("-")[0]),
+                interceptions=int(_team_total(team_boxes[other], "interceptions")),
+                fumble_recoveries=int(_team_total(team_boxes[other], "fumblesLost")),
+                safeties=safeties,
+                blocked_kicks=sum(
+                    play.get("type", {}).get("text") in _BLOCKED_KICK_PLAYS
+                    and int(play["start"]["team"]["id"]) == other
+                    for drive in drives
+                    for play in drive.get("plays", [])
+                ),
+                defensive_touchdowns=defensive_tds,
+                return_touchdowns=return_tds,
+                fourth_down_stops=sum(
+                    d.get("result") == _TURNOVER_ON_DOWNS_RESULT for d in against
+                ),
+                points_allowed=final[other] - conceded[team_id],
+                yards_allowed=int(_team_total(team_boxes[other], "totalYards")),
+            )
+        )
+    return lines
+
+
 class ESPNNFLClient:
     def __init__(self, timeout: float = 20.0, summary_factory: Callable[..., Any] | None = None):
         self._client = ESPNClient(timeout=timeout)
@@ -300,7 +457,12 @@ class ESPNNFLClient:
 
     def get_game(
         self, event_id: str, summary_payload: dict[str, Any] | None = None
-    ) -> tuple[GamePayload, list[StatsPayload], list[KickPayload] | None]:
+    ) -> tuple[
+        GamePayload,
+        list[StatsPayload],
+        list[KickPayload] | None,
+        list[TeamDefensePayload] | None,
+    ]:
         try:
             raw = summary_payload or (
                 self._summary_factory(event_id)
@@ -331,7 +493,7 @@ class ESPNNFLClient:
                 team_id = int(team_box["team"]["id"])
                 for athlete_id, bucket in _group_athletes_by_id(team_box).items():
                     stats.append(_stats_payload(athlete_id, bucket, team_id))
-            return game, stats, _parse_kicks(raw, stats)
+            return game, stats, _parse_kicks(raw, stats), _parse_team_defense(raw, game, stats)
         except (
             ESPNError,
             IngestionError,
@@ -365,6 +527,7 @@ def ingest_game(
     game: GamePayload,
     stats: list[StatsPayload],
     kicks: list[KickPayload] | None = None,
+    defense: list[TeamDefensePayload] | None = None,
 ) -> int:
     home_team = _upsert_team(db, game.home_team)
     away_team = _upsert_team(db, game.visitor_team)
@@ -427,6 +590,9 @@ def ingest_game(
     db.flush()
     if kicks is not None:
         _sync_kicks(db, record, kicks)
+    if defense is not None:
+        teams = {game.home_team.id: home_team, game.visitor_team.id: away_team}
+        _sync_team_defense(db, record, teams, defense)
     return len(stats)
 
 
@@ -452,6 +618,26 @@ def _sync_kicks(db: Session, game: Game, kicks: list[KickPayload]) -> None:
     db.flush()
 
 
+def _sync_team_defense(
+    db: Session, game: Game, teams: dict[int, Team], lines: list[TeamDefensePayload]
+) -> None:
+    """Upsert each team's D/ST line for the game (unique on team and game)."""
+    for line in lines:
+        team = teams[line.team_id]
+        row = db.scalar(
+            select(TeamGameStatsNFL).where(
+                TeamGameStatsNFL.team_id == team.id, TeamGameStatsNFL.game_id == game.id
+            )
+        )
+        if row is None:
+            row = TeamGameStatsNFL(team_id=team.id, game_id=game.id)
+            db.add(row)
+        for column in TeamDefensePayload.model_fields:
+            if column != "team_id":
+                setattr(row, column, getattr(line, column))
+    db.flush()
+
+
 def run(game_id: str, summary_payload: dict[str, Any] | None = None) -> int:
     from app.db.session import SessionLocal
 
@@ -459,8 +645,8 @@ def run(game_id: str, summary_payload: dict[str, Any] | None = None) -> int:
     client = ESPNNFLClient(settings.nfl_api_timeout_seconds)
     db = SessionLocal()
     try:
-        game, stats, kicks = client.get_game(game_id, summary_payload)
-        count = ingest_game(db, game, stats, kicks)
+        game, stats, kicks, defense = client.get_game(game_id, summary_payload)
+        count = ingest_game(db, game, stats, kicks, defense)
         db.commit()
         return count
     except Exception:
