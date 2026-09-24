@@ -1,14 +1,19 @@
 import httpx
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import select
 
+from app.db.models import Game, Player, Team
+from app.db.session import SessionLocal
 from data_pipeline.espn import ESPNClient
 from data_pipeline.nba_ingest import (
     ESPNNBAClient,
     GamePayload,
     IngestionError,
+    _attempts,
     _parse_minutes,
     _status_state,
+    ingest_game,
 )
 
 
@@ -85,6 +90,7 @@ def test_espn_client_normalizes_summary():
     assert game.id == "401705000"
     assert game.season == 2025
     assert game.status_state == "final"
+    assert (game.home_score, game.visitor_score) == (112, 104)
     assert stats[0].player.first_name == "Jaylen"
     assert stats[0].min == "PT25M01.00S"
 
@@ -99,6 +105,7 @@ def _summary_payload() -> dict:
                 "competitors": [
                     {
                         "homeAway": "home",
+                        "score": "112",
                         "team": {
                             "id": "10",
                             "displayName": "Golden State Warriors",
@@ -108,6 +115,7 @@ def _summary_payload() -> dict:
                     },
                     {
                         "homeAway": "away",
+                        "score": "104",
                         "team": {
                             "id": "6",
                             "displayName": "Cleveland Cavaliers",
@@ -143,3 +151,83 @@ def _live_player_for_espn() -> dict:
         "position": {"abbreviation": "G"},
         "jersey": "7",
     }
+
+
+@pytest.fixture
+def db():
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+
+
+def _ingest(db):
+    game, stats = ESPNNBAClient(summary_factory=lambda _: _summary_payload()).get_game("401705000")
+    return ingest_game(db, game, stats)
+
+
+def test_ingest_game_stores_scores_and_a_correctly_labelled_season(db):
+    _ingest(db)
+
+    record = db.scalar(select(Game).where(Game.external_id == "401705000"))
+    assert (record.home_score, record.away_score) == (112, 104)
+    assert record.season == "2024-25"  # ESPN's 2025 is the season *ending* in 2025
+
+
+def test_ingest_game_namespaces_team_ids_by_sport(db):
+    _ingest(db)
+
+    team = db.scalar(select(Team).where(Team.abbreviation == "GSW"))
+    assert team.external_id == "nba:10"
+
+
+def test_ingest_game_seeds_a_new_player_from_the_box_score(db):
+    _ingest(db)
+
+    player = db.scalar(select(Player).where(Player.external_id == "70"))
+    assert player.name == "Jaylen Brown"
+    assert player.position == "G"
+    assert player.active is True
+    assert player.team.abbreviation == "GSW"
+
+
+def test_ingest_game_does_not_overwrite_a_players_current_team_or_status(db):
+    current = Team(name="Current Team", abbreviation="CUR", sport="NBA")
+    db.add(current)
+    db.flush()
+    db.add(Player(external_id="70", name="Jaylen Brown", sport="NBA", team_id=current.id,
+                  position="F", active=False))
+    db.flush()
+
+    _ingest(db)
+
+    player = db.scalar(select(Player).where(Player.external_id == "70"))
+    assert player.team_id == current.id
+    assert player.position == "F"
+    assert player.active is False
+
+
+def test_attempts_come_from_the_made_attempted_string():
+    assert _attempts("9-17") == 17
+    assert _attempts("0-1") == 1
+    assert _attempts("0-0") == 0
+    assert _attempts(17) == 17
+    assert _attempts(None) == 0
+
+
+def test_shooting_attempts_are_read_from_real_combined_fields():
+    payload = _summary_payload()
+    payload["boxscore"]["players"][0]["statistics"] = [{
+        "keys": ["minutes", "points", "fieldGoalsMade-fieldGoalsAttempted",
+                 "threePointFieldGoalsMade-threePointFieldGoalsAttempted", "rebounds"],
+        "athletes": [{
+            "athlete": _live_player_for_espn(),
+            "stats": ["34", "23", "9-17", "2-6", "9"],
+        }],
+    }]
+
+    _, stats = ESPNNBAClient(summary_factory=lambda _: payload).get_game("401705000")
+
+    assert (stats[0].fga, stats[0].fg3a) == (17, 6)
