@@ -31,7 +31,7 @@ export default async function PlayerDetailPage({
   }
 
   const [stats, schedule, scoring, season] = await Promise.all([
-    getPlayerStats(playerId, GAME_LOG_LIMIT),
+    getPlayerStats(playerId, GAME_LOG_LIMIT, "current"),
     getPlayerSchedule(playerId),
     getScoringPreset(player.sport),
     getPlayerSeason(playerId),
