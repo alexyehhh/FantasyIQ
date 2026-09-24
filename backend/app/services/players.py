@@ -7,16 +7,26 @@ the AI tool layer both call these functions rather than querying the
 DB directly.
 """
 
-import operator
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from functools import reduce
 
-from sqlalchemy import Select, Subquery, and_, func, or_, select
+from sqlalchemy import Select, Subquery, and_, case, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.db.models import Game, Player, PlayerGameStats, PlayerGameStatsNFL, Team
-from app.services.scoring import DEFAULT_SCORING
+from app.db.models import (
+    FieldGoalKick,
+    Game,
+    Player,
+    PlayerGameStats,
+    PlayerGameStatsNFL,
+    Team,
+)
+from app.services.scoring import (
+    ScoringConfig,
+    bracket_case,
+    default_config,
+    player_points_expression,
+)
 
 # Which stats table a player's game log comes from depends on their sport.
 _STATS_MODEL_BY_SPORT = {
@@ -59,20 +69,57 @@ def _stats_season(db: Session, sport: str) -> str | None:
     )
 
 
-def _season_points_subquery(sport: str, season: str | None) -> Subquery:
-    """Each player's fantasy points summed over one season's games (default scoring)."""
-    model = _STATS_MODEL_BY_SPORT[sport]
-    points = reduce(
-        operator.add,
-        (weight * getattr(model, stat) for stat, weight in DEFAULT_SCORING[sport].items()),
-    )
-    return (
-        select(model.player_id.label("player_id"), func.sum(points).label("fantasy_points"))
+def _season_points_subquery(config: ScoringConfig, season: str | None) -> Subquery:
+    """Each player's fantasy points summed over one season's games under `config`.
+
+    Kickers' distance-scored field goals come from the per-kick table and are added to the
+    points from their stat line."""
+    model = _STATS_MODEL_BY_SPORT[config.sport]
+    stat_points = (
+        select(
+            model.player_id.label("player_id"),
+            func.sum(player_points_expression(config, model)).label("stat_points"),
+        )
         .join(Game, model.game_id == Game.id)
         .where(Game.season == season)
         .group_by(model.player_id)
         .subquery()
     )
+    if not (config.field_goal_made or config.field_goal_missed):
+        return select(
+            stat_points.c.player_id, stat_points.c.stat_points.label("fantasy_points")
+        ).subquery()
+
+    made = bracket_case(FieldGoalKick.distance, config.field_goal_made)
+    missed = bracket_case(FieldGoalKick.distance, config.field_goal_missed)
+    kick_value = case((FieldGoalKick.result == "made", made), else_=missed)
+    kick_points = (
+        select(
+            FieldGoalKick.player_id.label("player_id"),
+            func.sum(kick_value).label("kick_points"),
+        )
+        .join(Game, FieldGoalKick.game_id == Game.id)
+        .where(Game.season == season)
+        .group_by(FieldGoalKick.player_id)
+        .subquery()
+    )
+    return (
+        select(
+            stat_points.c.player_id,
+            (stat_points.c.stat_points + func.coalesce(kick_points.c.kick_points, 0)).label(
+                "fantasy_points"
+            ),
+        )
+        .outerjoin(kick_points, kick_points.c.player_id == stat_points.c.player_id)
+        .subquery()
+    )
+
+
+def _scoring_for(sport: str, scoring: ScoringConfig | None) -> ScoringConfig:
+    config = scoring or default_config(sport)
+    if config.sport != sport:
+        raise ValueError(f"A {config.sport} scoring config can't rank {sport} players")
+    return config
 
 
 def list_players(
@@ -85,13 +132,15 @@ def list_players(
     sort: str = "name",
     limit: int = 50,
     offset: int = 0,
+    scoring: ScoringConfig | None = None,
 ) -> tuple[list[Player], int]:
     """Returns (page of players, total matching count) for search/pagination.
 
     `positions` matches any of the given position codes (e.g. ["RB", "WR"]).
     `sort` is "name" or "fantasy_points" (most first, over the latest season with
     stats; players with none come last, by name). Fantasy points are only
-    comparable within one sport, so that sort needs `sport`."""
+    comparable within one sport, so that sort needs `sport`. `scoring` is the config the
+    points come from (the sport's FantasyIQ default when omitted)."""
     base_query = _player_query(
         sport=sport, team_id=team_id, search=search, positions=positions
     )
@@ -103,7 +152,7 @@ def list_players(
     if sort == "fantasy_points":
         if sport is None:
             raise ValueError("Sorting by fantasy points needs a sport")
-        points = _season_points_subquery(sport, _stats_season(db, sport))
+        points = _season_points_subquery(_scoring_for(sport, scoring), _stats_season(db, sport))
         page_query = page_query.outerjoin(points, points.c.player_id == Player.id).order_by(
             func.coalesce(points.c.fantasy_points, 0).desc(), Player.name
         )
@@ -114,14 +163,16 @@ def list_players(
     return list(players), total
 
 
-def get_season_fantasy_points(db: Session, players: list[Player]) -> dict[int, float]:
-    """Season fantasy points (default scoring) for these players, by player id.
+def get_season_fantasy_points(
+    db: Session, players: list[Player], scoring: ScoringConfig | None = None
+) -> dict[int, float]:
+    """Season fantasy points for these players, by player id (default scoring unless given).
 
     Players with no stats that season are absent. Uses the same season as the
     fantasy-points sort in list_players."""
     totals: dict[int, float] = {}
     for sport in {player.sport for player in players}:
-        points = _season_points_subquery(sport, _stats_season(db, sport))
+        points = _season_points_subquery(_scoring_for(sport, scoring), _stats_season(db, sport))
         ids = [player.id for player in players if player.sport == sport]
         for player_id, total in db.execute(
             select(points.c.player_id, points.c.fantasy_points).where(points.c.player_id.in_(ids))
