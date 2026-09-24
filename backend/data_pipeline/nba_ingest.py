@@ -10,7 +10,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -63,9 +63,24 @@ class StatsPayload(BaseModel):
     stl: int = Field(default=0, ge=0)
     blk: int = Field(default=0, ge=0)
     turnover: int = Field(default=0, ge=0)
+    fgm: int = Field(default=0, ge=0)
     fga: int = Field(default=0, ge=0)
+    fg3m: int = Field(default=0, ge=0)
     fg3a: int = Field(default=0, ge=0)
+    ftm: int = Field(default=0, ge=0)
+    fta: int = Field(default=0, ge=0)
     player: PlayerPayload
+
+    @model_validator(mode="after")
+    def _made_shots_cannot_exceed_attempts(self) -> StatsPayload:
+        for made, attempted, name in (
+            (self.fgm, self.fga, "field goals"),
+            (self.fg3m, self.fg3a, "three-pointers"),
+            (self.ftm, self.fta, "free throws"),
+        ):
+            if made > attempted:
+                raise ValueError(f"{name} made ({made}) exceeds attempted ({attempted})")
+        return self
 
 
 def _parse_minutes(value: str | int | float | None) -> float:
@@ -110,6 +125,16 @@ def _attempts(value: Any) -> int:
     return int(value or 0)
 
 
+def _made(value: Any) -> int:
+    """Makes from ESPN's "made-attempted" shooting string ("9-17" -> 9).
+
+    Also accepts a bare makes number, which is how the older payloads sent it.
+    """
+    if isinstance(value, str) and "-" in value:
+        return int(value.partition("-")[0] or 0)
+    return int(value or 0)
+
+
 def _stats_payload(raw: dict[str, Any], team_id: int, key_names: list[str]) -> StatsPayload:
     values = dict(zip(key_names, raw.get("statistics", raw.get("stats", [])), strict=False))
     athlete = raw.get("athlete", raw)
@@ -123,9 +148,22 @@ def _stats_payload(raw: dict[str, Any], team_id: int, key_names: list[str]) -> S
         stl=int(_stat_value(values, ("STL", "steals")) or 0),
         blk=int(_stat_value(values, ("BLK", "blocks")) or 0),
         turnover=int(_stat_value(values, ("TO", "turnovers")) or 0),
+        fgm=_made(
+            _stat_value(values, ("FGM", "fieldGoalsMade", "fieldGoalsMade-fieldGoalsAttempted"))
+        ),
         fga=_attempts(
             _stat_value(
                 values, ("FGA", "fieldGoalsAttempted", "fieldGoalsMade-fieldGoalsAttempted")
+            )
+        ),
+        fg3m=_made(
+            _stat_value(
+                values,
+                (
+                    "3PM",
+                    "threePointFieldGoalsMade",
+                    "threePointFieldGoalsMade-threePointFieldGoalsAttempted",
+                ),
             )
         ),
         fg3a=_attempts(
@@ -136,6 +174,14 @@ def _stats_payload(raw: dict[str, Any], team_id: int, key_names: list[str]) -> S
                     "threePointersAttempted",
                     "threePointFieldGoalsMade-threePointFieldGoalsAttempted",
                 ),
+            )
+        ),
+        ftm=_made(
+            _stat_value(values, ("FTM", "freeThrowsMade", "freeThrowsMade-freeThrowsAttempted"))
+        ),
+        fta=_attempts(
+            _stat_value(
+                values, ("FTA", "freeThrowsAttempted", "freeThrowsMade-freeThrowsAttempted")
             )
         ),
         player=PlayerPayload(
@@ -260,8 +306,12 @@ def ingest_game(db: Session, game: GamePayload, stats: list[StatsPayload]) -> in
         line.steals = stat.stl
         line.blocks = stat.blk
         line.turnovers = stat.turnover
+        line.field_goals_made = stat.fgm
         line.field_goal_attempts = stat.fga
+        line.three_pointers_made = stat.fg3m
         line.three_point_attempts = stat.fg3a
+        line.free_throws_made = stat.ftm
+        line.free_throw_attempts = stat.fta
     db.flush()
     return len(stats)
 
