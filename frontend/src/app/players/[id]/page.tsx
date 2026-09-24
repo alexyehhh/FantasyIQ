@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import StatChart from "@/components/StatChart";
-import { getPlayer, getPlayerStats } from "@/lib/api";
+import InjuryNote from "@/components/InjuryNote";
+import PlayerHero from "@/components/PlayerHero";
+import PlayerStats from "@/components/PlayerStats";
+import { getPlayer, getPlayerSchedule, getPlayerStats } from "@/lib/api";
+
+// The API's maximum page: enough for a whole season of results.
+const GAME_LOG_LIMIT = 200;
 
 export default async function PlayerDetailPage({
   params,
@@ -19,25 +24,43 @@ export default async function PlayerDetailPage({
     notFound();
   }
 
-  const stats = (await getPlayerStats(playerId, 20)) ?? [];
+  const [stats, schedule] = await Promise.all([
+    getPlayerStats(playerId, GAME_LOG_LIMIT),
+    getPlayerSchedule(playerId),
+  ]);
 
   return (
-    <main className="mx-auto max-w-3xl p-8">
-      <Link href="/players" className="text-sm text-blue-600 hover:underline">
-        &larr; Back to players
+    <main className="mx-auto max-w-[1120px] px-4 pb-14 pt-6">
+      <Link
+        href="/players"
+        className="mb-3.5 inline-flex items-center gap-1.5 text-[13px] font-semibold text-ink-2 hover:text-accent"
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m15 6-6 6 6 6" />
+        </svg>
+        Back to players
       </Link>
 
-      <h1 className="mt-2 text-2xl font-bold">{player.name}</h1>
-      <p className="text-gray-500">
-        {player.sport}
-        {player.position ? ` · ${player.position}` : ""}
-        {player.jersey_number ? ` · #${player.jersey_number}` : ""}
-      </p>
-
-      <section className="mt-8">
-        <h2 className="mb-3 text-lg font-semibold">Recent games</h2>
-        <StatChart sport={player.sport} entries={stats} />
-      </section>
+      <PlayerHero player={player} entries={stats ?? []} />
+      {player.injury && <InjuryNote injury={player.injury} />}
+      <PlayerStats
+        key={player.id}
+        sport={player.sport}
+        position={player.position}
+        entries={stats ?? []}
+        schedule={schedule ?? []}
+        byeWeek={player.team?.bye_week ?? null}
+      />
     </main>
   );
 }
