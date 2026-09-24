@@ -3,7 +3,13 @@ import { notFound } from "next/navigation";
 import InjuryNote from "@/components/InjuryNote";
 import PlayerHero from "@/components/PlayerHero";
 import PlayerStats from "@/components/PlayerStats";
-import { getPlayer, getPlayerSchedule, getPlayerStats, getScoringPreset } from "@/lib/api";
+import {
+  getPlayer,
+  getPlayerSchedule,
+  getPlayerSeason,
+  getPlayerStats,
+  getScoringPreset,
+} from "@/lib/api";
 
 // The API's maximum page: enough for a whole season of results.
 const GAME_LOG_LIMIT = 200;
@@ -24,10 +30,11 @@ export default async function PlayerDetailPage({
     notFound();
   }
 
-  const [stats, schedule, scoring] = await Promise.all([
+  const [stats, schedule, scoring, season] = await Promise.all([
     getPlayerStats(playerId, GAME_LOG_LIMIT),
     getPlayerSchedule(playerId),
     getScoringPreset(player.sport),
+    getPlayerSeason(playerId),
   ]);
 
   return (
@@ -52,7 +59,7 @@ export default async function PlayerDetailPage({
         Back to players
       </Link>
 
-      <PlayerHero player={player} entries={stats ?? []} />
+      <PlayerHero player={player} entries={stats ?? []} season={season} />
       {player.injury && <InjuryNote injury={player.injury} />}
       <PlayerStats
         key={player.id}
