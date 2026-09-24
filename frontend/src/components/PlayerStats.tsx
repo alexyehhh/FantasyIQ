@@ -55,7 +55,7 @@ export default function PlayerStats({
           </h2>
           <p className="mt-1 text-ink-2">
             {profile.tracked
-              ? "Stats appear here once this player's games have been played and ingested."
+              ? "Stats appear here once this season's games have been played. Earlier seasons aren't counted."
               : `${profile.untrackedLabel ?? "Stat"} stats and fantasy points will appear here once they are added.`}
           </p>
         </section>
