@@ -2,7 +2,7 @@ import {
   NBA_POSITION_FILTERS,
   NFL_POSITION_FILTERS,
   displayPosition,
-  isSpecialTeamer,
+  isPunter,
   positionFiltersFor,
 } from "./positions";
 
@@ -34,16 +34,18 @@ describe("NFL position filters", () => {
     expect(NFL_POSITION_FILTERS.find((filter) => filter.label === "RB")!.positions).toContain("FB");
   });
 
-  it("shows DEF but doesn't let it be chosen yet", () => {
+  it("makes DEF selectable, and lists team defenses rather than players", () => {
     const def = NFL_POSITION_FILTERS.find((filter) => filter.label === "DEF")!;
 
-    expect(def.unavailable).toBeDefined();
+    expect(def.defense).toBe(true);
+    expect(def.unavailable).toBeUndefined();
     expect(def.positions).toEqual([]);
   });
 
-  it("leaves every other filter selectable", () => {
+  it("lists players for every other filter", () => {
     for (const filter of NFL_POSITION_FILTERS.filter((f) => f.label !== "DEF")) {
       expect(filter.unavailable).toBeUndefined();
+      expect(filter.defense).toBeUndefined();
       expect(filter.positions.length).toBeGreaterThan(0);
     }
   });
@@ -80,10 +82,10 @@ describe("displayPosition", () => {
     expect(displayPosition(null)).toBeNull();
   });
 
-  it("recognizes kickers and punters as special teamers", () => {
-    expect(isSpecialTeamer("PK")).toBe(true);
-    expect(isSpecialTeamer("P")).toBe(true);
-    expect(isSpecialTeamer("WR")).toBe(false);
-    expect(isSpecialTeamer(null)).toBe(false);
+  it("recognizes punters, who have no fantasy points, but not kickers", () => {
+    expect(isPunter("P")).toBe(true);
+    expect(isPunter("PK")).toBe(false);
+    expect(isPunter("WR")).toBe(false);
+    expect(isPunter(null)).toBe(false);
   });
 });
