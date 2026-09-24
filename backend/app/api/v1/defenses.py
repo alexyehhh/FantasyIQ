@@ -18,9 +18,10 @@ from app.schemas.defenses import (
     DefenseListItem,
     DefenseListResponse,
 )
-from app.schemas.players import NextGame, ScheduleEntry, TeamSummary
+from app.schemas.players import NextGame, ScheduleEntry, SeasonSummary, TeamSummary
 from app.services import defenses as defenses_service
 from app.services import players as players_service
+from app.services import season_summary as season_summary_service
 
 router = APIRouter(prefix="/defenses", tags=["defenses"])
 
@@ -119,3 +120,17 @@ def get_defense_schedule(
         )
         for matchup in players_service.get_team_schedule(db, team.id, team.sport)
     ]
+
+
+@router.get("/{team_id}/season", response_model=SeasonSummary | None)
+def get_defense_season(
+    team_id: int,
+    scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
+    db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
+) -> SeasonSummary | None:
+    """The defense's season totals with their rank among the 32 defenses; null before it has
+    played."""
+    team = _defense_or_404(db, team_id)
+    config = scoring_or_422(scoring, "NFL")
+    summary = season_summary_service.get_defense_season_summary(db, team, scoring=config)
+    return SeasonSummary.model_validate(summary, from_attributes=True) if summary else None
