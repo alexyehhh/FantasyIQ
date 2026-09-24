@@ -19,20 +19,18 @@ export default async function HomePage() {
   const isOk = status === "ok";
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-24">
-      <h1 className="text-3xl font-bold">FantasyIQ</h1>
+    <main className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-center gap-4 p-8">
+      <h1 className="font-display text-5xl font-bold uppercase tracking-wide">FantasyIQ</h1>
       <div className="flex items-center gap-2">
         <span
-          className={`inline-block h-3 w-3 rounded-full ${
-            isOk ? "bg-green-500" : "bg-red-500"
-          }`}
+          className={`inline-block h-3 w-3 rounded-full ${isOk ? "bg-good" : "bg-bad"}`}
         />
         <span>
           Backend status: <strong>{status}</strong> ({environment})
         </span>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <Link href="/players" className="text-blue-600 hover:underline">
+      {error && <p className="text-sm text-bad">{error}</p>}
+      <Link href="/players" className="font-semibold text-accent hover:underline">
         Browse players &rarr;
       </Link>
     </main>
