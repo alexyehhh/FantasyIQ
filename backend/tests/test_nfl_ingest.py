@@ -191,3 +191,40 @@ def _kelce() -> dict:
         "position": {"abbreviation": "TE"},
         "jersey": "87",
     }
+
+
+def test_espn_client_reads_real_box_score_where_keys_are_machine_names():
+    """Real ESPN payloads carry machine names in "keys" and the display names
+    ("C/ATT", "YDS", ...) in "labels"; stats were silently all zero when only
+    "keys" was read."""
+    payload = _summary_payload()
+    payload["boxscore"]["players"][0]["statistics"] = [
+        {
+            "name": "passing",
+            "keys": ["completions/passingAttempts", "passingYards", "yardsPerPassAttempt",
+                     "passingTouchdowns", "interceptions"],
+            "labels": ["C/ATT", "YDS", "AVG", "TD", "INT"],
+            "athletes": [{"athlete": _mahomes(), "stats": ["17/28", "131", "4.7", "1", "1"]}],
+        },
+        {
+            "name": "receiving",
+            "keys": ["receptions", "receivingYards", "yardsPerReception",
+                     "receivingTouchdowns", "longReception", "receivingTargets"],
+            "labels": ["REC", "YDS", "AVG", "TD", "LONG", "TGTS"],
+            "athletes": [{"athlete": _kelce(), "stats": ["4", "43", "10.8", "1", "19", "5"]}],
+        },
+        {
+            "name": "fumbles",
+            "keys": ["fumbles", "fumblesLost", "fumblesRecovered"],
+            "labels": ["FUM", "LOST", "REC"],
+            "athletes": [{"athlete": _mahomes(), "stats": ["3", "1", "1"]}],
+        },
+    ]
+    _, stats = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+
+    qb = next(stat for stat in stats if stat.id == 30)
+    assert (qb.passing_completions, qb.passing_attempts) == (17, 28)
+    assert (qb.passing_yards, qb.passing_touchdowns, qb.interceptions) == (131, 1, 1)
+    assert qb.fumbles_lost == 1
+    te = next(stat for stat in stats if stat.id == 31)
+    assert (te.receptions, te.receiving_targets, te.receiving_yards) == (4, 5, 43)
