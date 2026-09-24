@@ -485,3 +485,48 @@ def test_choosing_a_scoring_without_a_sport_is_rejected(client):
     response = client.get("/api/v1/players", params={"scoring": "default"})
 
     assert response.status_code == 422
+
+
+def test_player_season_reports_totals_and_the_rank_among_the_position(client, db):
+    team = _make_team(db, sport="NFL", abbreviation="SEA1")
+    game = _make_game(db, team, sport="NFL")
+    leader = _make_player(db, team, sport="NFL", name="Leader", position="QB")
+    other = _make_player(db, team, sport="NFL", name="Other", position="QB")
+    db.add(PlayerGameStatsNFL(player_id=leader.id, game_id=game.id, passing_yards=400))
+    db.add(PlayerGameStatsNFL(player_id=other.id, game_id=game.id, passing_yards=250))
+    db.flush()
+
+    body = client.get(f"/api/v1/players/{other.id}/season").json()
+
+    assert (body["season"], body["games"], body["position_group"]) == ("2025", 1, "QB")
+    assert body["pool_size"] == 2
+    assert body["stats"]["passing_yards"]["total"] == 250
+    assert body["stats"]["passing_yards"]["rank"] == 2  # behind Leader's 400
+    assert body["stats"]["passing_yards"]["tied"] is False
+    assert set(body["stats"]["fantasy_points"]) == {"total", "rank", "tied"}
+
+
+def test_player_season_is_null_before_they_have_played_and_404_for_a_missing_player(client, db):
+    team = _make_team(db, sport="NFL", abbreviation="SEA2")
+    benched = _make_player(db, team, sport="NFL", name="Benched", position="QB")
+
+    response = client.get(f"/api/v1/players/{benched.id}/season")
+
+    assert response.status_code == 200
+    assert response.json() is None
+    assert client.get("/api/v1/players/999999/season").status_code == 404
+
+
+def test_player_season_ranks_fantasy_points_under_an_inline_scoring(client, db):
+    team = _make_team(db, sport="NFL", abbreviation="SEA3")
+    game = _make_game(db, team, sport="NFL")
+    qb = _make_player(db, team, sport="NFL", name="Scored", position="QB")
+    db.add(PlayerGameStatsNFL(player_id=qb.id, game_id=game.id, passing_yards=100))
+    db.flush()
+    config = json.dumps({"name": "Yards", "sport": "NFL", "player_weights": {"passing_yards": 1}})
+
+    body = client.get(f"/api/v1/players/{qb.id}/season", params={"scoring": config}).json()
+    bad = client.get(f"/api/v1/players/{qb.id}/season", params={"scoring": "nope"})
+
+    assert body["stats"]["fantasy_points"]["total"] == 100
+    assert bad.status_code == 422
