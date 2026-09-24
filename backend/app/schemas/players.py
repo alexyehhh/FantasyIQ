@@ -85,6 +85,13 @@ class PlayerListResponse(BaseModel):
     offset: int
 
 
+class KickEntry(BaseModel):
+    """One field goal attempt: its distance in yards and how it ended."""
+
+    distance: int
+    result: str  # "made" | "missed" | "blocked"
+
+
 class PlayerGameStatsEntry(BaseModel):
     """One game's stat line. `stats` is intentionally a flat dict rather
     than NBA/NFL-specific fields, since which columns are present depends
@@ -92,12 +99,17 @@ class PlayerGameStatsEntry(BaseModel):
 
     `opponent`/`is_home`/scores/`result` are relative to the player's
     current team and are None when the game can't be tied to it (e.g. a
-    game played for a previous team, or one without a final score)."""
+    game played for a previous team, or one without a final score).
+
+    `fantasy_points` is the game's score under the request's scoring config. `kicks` lists an
+    NFL kicker's field goal attempts, in order, and is empty for everyone else."""
 
     game_id: int
     game_date: UTCDatetime
     week: int | None = None
     stats: dict[str, int | float]
+    fantasy_points: float
+    kicks: list[KickEntry] = []
     opponent: TeamSummary | None = None
     is_home: bool | None = None
     team_score: int | None = None
