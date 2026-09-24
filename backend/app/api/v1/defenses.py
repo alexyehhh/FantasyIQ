@@ -78,11 +78,17 @@ def get_defense(
 def get_defense_stats(
     team_id: int,
     limit: int | None = Query(default=None, ge=1, le=200),
+    season: Literal["current", "all"] = Query(
+        default="all", description="'current' for the season in play only, 'all' for every season"
+    ),
     scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
     db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
 ) -> list[DefenseGameStatsEntry]:
     team = _defense_or_404(db, team_id)
     config = scoring_or_422(scoring, "NFL")
+    only_season = players_service.get_current_season(db, "NFL") if season == "current" else None
+    if season == "current" and only_season is None:
+        return []
     return [
         DefenseGameStatsEntry(
             game_id=row.game.id,
@@ -96,7 +102,7 @@ def get_defense_stats(
             opponent_score=row.opponent_score,
             result=row.result,
         )
-        for row in defenses_service.get_defense_game_log(db, team, limit=limit)
+        for row in defenses_service.get_defense_game_log(db, team, limit=limit, season=only_season)
     ]
 
 
