@@ -132,3 +132,25 @@ class ScheduleEntry(BaseModel):
     team_score: int | None
     opponent_score: int | None
     result: str | None  # "W" | "L" | "T"
+
+
+class RankedStat(BaseModel):
+    """A season total and its rank (1 = best) among the same position; `tied` when another
+    player has the same total."""
+
+    total: float
+    rank: int
+    tied: bool
+
+
+class SeasonSummary(BaseModel):
+    """A player's (or defense's) totals for the latest season with stats, each ranked among
+    `pool_size` players in `position_group`. `stats` has every stat column plus
+    `fantasy_points` under the request's scoring. Fewer is better for turnovers,
+    interceptions thrown, fumbles lost, and a defense's points and yards allowed."""
+
+    season: str
+    games: int
+    position_group: str
+    pool_size: int
+    stats: dict[str, RankedStat]
