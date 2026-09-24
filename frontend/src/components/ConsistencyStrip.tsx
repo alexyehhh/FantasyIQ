@@ -21,7 +21,7 @@ function median(sorted: number[]): number {
 
 /** Every game as a dot on one axis: how spread out a player's output is, at a glance. */
 export default function ConsistencyStrip({ sport, entries, stat }: ConsistencyStripProps) {
-  const values = entries.map((entry) => statValue(entry, stat, sport));
+  const values = entries.map((entry) => statValue(entry, stat));
   const sorted = [...values].sort((a, b) => a - b);
   const floor = sorted[0];
   const ceiling = sorted[sorted.length - 1];
