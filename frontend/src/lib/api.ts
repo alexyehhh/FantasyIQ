@@ -348,3 +348,41 @@ export async function getDefenseSchedule(id: number): Promise<ScheduleEntry[] | 
 
   return res.json();
 }
+
+/** A season total and its rank (1 = best) among the same position; `tied` if others share it. */
+export interface RankedStat {
+  total: number;
+  rank: number;
+  tied: boolean;
+}
+
+/**
+ * A player's or defense's totals for the latest season with stats, each ranked among the
+ * `pool_size` players in `position_group`. `stats` has every stat plus `fantasy_points`.
+ */
+export interface SeasonSummary {
+  season: string;
+  games: number;
+  position_group: string;
+  pool_size: number;
+  stats: Record<string, RankedStat>;
+}
+
+async function fetchSeason(path: string): Promise<SeasonSummary | null> {
+  try {
+    const res = await fetch(`${apiUrl()}${path}`, { cache: "no-store" });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A player's season totals and ranks, or null before they've played (or if it can't be fetched). */
+export function getPlayerSeason(id: number): Promise<SeasonSummary | null> {
+  return fetchSeason(`/api/v1/players/${id}/season`);
+}
+
+/** A defense's season totals and ranks among the defenses, or null if there are none. */
+export function getDefenseSeason(id: number): Promise<SeasonSummary | null> {
+  return fetchSeason(`/api/v1/defenses/${id}/season`);
+}
