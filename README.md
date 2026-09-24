@@ -237,8 +237,7 @@ fantasy points and injury status and link to `/players/{id}`. A player page show
   average line, switchable between the position's key stats and fantasy points;
 - an averages table and a consistency plot (floor / median / average / ceiling);
 - a game log for the current season, from its first game: results with the
-  player's stats, then upcoming games with kickoff times. Earlier seasons aren't
-  listed (they still count in the chart and averages). A football season is shown
+  player's stats, then upcoming games with kickoff times. A football season is shown
   whole, bye week included (through week 17). A basketball season is far longer,
   so the log shows one page of 20 games at a time, counted from game 1, with
   Previous and Next buttons that replace the page. It opens on the first page that
@@ -277,10 +276,26 @@ averages, consistency, game log), with sacks, takeaways, scores and points and y
 allowed as its stats. Game dates and times are shown in US Pacific time. All backend
 calls go through `frontend/src/lib/api.ts`.
 
+### The current season
+
+Everything on a player or defense page (header totals and ranks, chart, averages,
+consistency strip, game log) is the **current season** only. That is the season of the
+sport's next game that hasn't finished (one in progress counts), or, once the schedule has
+run out, of its latest game. So in the NBA offseason last season's final games are history,
+not "the last 5/10 games": the page shows an empty state and the schedule until the
+team's first game of the new season is played. The backend defines it once
+(`get_current_season` in `app/services/players.py`).
+
+`/players/{id}/stats` and `/defenses/{team_id}/stats` take `season=current` for that, or
+`season=all` (the default) for every season, which is what models and other consumers
+should ask for. The frontend pages ask for `current`. The players list still ranks by the
+latest season that has stats, so NBA totals shown there are last season's until the new one
+starts.
+
 ### Season totals and ranks
 
 `GET /api/v1/players/{id}/season` and `GET /api/v1/defenses/{team_id}/season` return a
-player's (or defense's) totals for the latest season with stats, each stat with its rank
+player's (or defense's) totals for the current season (see below), each stat with its rank
 (1 = best), whether it is `tied`, and the `pool_size` it is ranked among. `stats` has every
 stat column plus `fantasy_points`, scored under the `scoring` parameter (default scoring
 when omitted). The response is `null` for a player who hasn't played yet.
