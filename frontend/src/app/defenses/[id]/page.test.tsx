@@ -69,7 +69,7 @@ describe("DefenseDetailPage", () => {
     await renderPage();
 
     expect(mockedGetDefense).toHaveBeenCalledWith(7);
-    expect(mockedGetStats).toHaveBeenCalledWith(7, 200);
+    expect(mockedGetStats).toHaveBeenCalledWith(7, 200, "current");
     expect(mockedGetSchedule).toHaveBeenCalledWith(7);
     expect(mockedGetScoring).toHaveBeenCalledWith("NFL");
   });
