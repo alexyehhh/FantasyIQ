@@ -81,6 +81,19 @@ describe("player API client", () => {
     expect(url).toContain("/api/v1/players/1/stats?limit=20");
   });
 
+  it("getPlayerStats can ask for the current season only, alone or with a limit", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => [] });
+
+    await getPlayerStats(1, undefined, "current");
+    await getPlayerStats(1, 200, "current");
+    await getPlayerStats(1);
+
+    const urls = (global.fetch as jest.Mock).mock.calls.map(([url]) => url);
+    expect(urls[0]).toMatch(/\/api\/v1\/players\/1\/stats\?season=current$/);
+    expect(urls[1]).toMatch(/\/api\/v1\/players\/1\/stats\?limit=200&season=current$/);
+    expect(urls[2]).toMatch(/\/api\/v1\/players\/1\/stats$/);
+  });
+
   it("listPlayers repeats the position param once per position", async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: true,
@@ -171,12 +184,14 @@ describe("defense API client", () => {
     await expect(call()).rejects.toThrow("500");
   });
 
-  it("getDefenseStats passes the limit and reads /defenses/{id}/stats", async () => {
+  it("getDefenseStats passes the limit and season and reads /defenses/{id}/stats", async () => {
     (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => [] });
 
-    await getDefenseStats(7, 200);
+    await getDefenseStats(7, 200, "current");
 
-    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain("/api/v1/defenses/7/stats?limit=200");
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain(
+      "/api/v1/defenses/7/stats?limit=200&season=current",
+    );
   });
 });
 
