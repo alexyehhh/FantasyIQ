@@ -233,10 +233,39 @@ def _teams_for(db: Session, games: list[Game]) -> dict[int, Team]:
     return {team.id: team for team in db.scalars(select(Team).where(Team.id.in_(team_ids)))}
 
 
+def get_current_season(db: Session, sport: str, *, now: datetime | None = None) -> str | None:
+    """The season in play for a sport: that of its next game that hasn't finished (one in
+    progress counts), or once the schedule has run out, of its latest game.
+
+    Until a season's first game is played the previous season's stats are history, not "this
+    season", which is why the player and defense pages use this and not the latest season that
+    happens to have stats. Times are naive UTC, as stored."""
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    upcoming = db.scalar(
+        select(Game.season)
+        .where(
+            Game.sport == sport,
+            or_(
+                and_(Game.status == "scheduled", Game.start_time >= now),
+                Game.status == "in_progress",
+            ),
+        )
+        .order_by(Game.start_time)
+        .limit(1)
+    )
+    if upcoming is not None:
+        return upcoming
+    return db.scalar(
+        select(Game.season).where(Game.sport == sport).order_by(Game.start_time.desc()).limit(1)
+    )
+
+
 def get_player_game_log(
-    db: Session, player: Player, *, limit: int | None = None
+    db: Session, player: Player, *, limit: int | None = None, season: str | None = None
 ) -> list[GameLogRow]:
     """A player's stat lines with opponent and score, most recent game first.
+
+    `season` limits it to one season's games (the default is every season).
 
     The stats row's shape (NBA vs. NFL columns) depends on player.sport —
     there is no single "PlayerGameStats" for both, per the DB schema. The
@@ -250,6 +279,8 @@ def get_player_game_log(
         .where(model.player_id == player.id)
         .order_by(Game.start_time.desc())
     )
+    if season is not None:
+        query = query.where(Game.season == season)
     if limit is not None:
         query = query.limit(limit)
     rows = list(db.execute(query).all())
