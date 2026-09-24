@@ -45,3 +45,36 @@ def status_state(raw: dict[str, Any]) -> str:
     if state in {"pre", "post", "in"}:
         return {"pre": "scheduled", "post": "final", "in": "in_progress"}[state]
     raise IngestionError("ESPN summary has no recognized game status")
+
+
+def season_label(sport: str, year: int) -> str:
+    """Human season label for ESPN's season year.
+
+    ESPN's year is the year a season *ends* for the NBA (2027 is 2026-27) but
+    the year it starts for the NFL (2026 is the 2026 season).
+    """
+    return f"{year - 1}-{str(year)[-2:]}" if sport == "NBA" else str(year)
+
+
+def competitor_score(competitor: dict[str, Any]) -> int | None:
+    """A competitor's score, or None before the game has one.
+
+    Game summaries carry it as a string ("31"), team schedules as an object
+    ({"value": 31.0, "displayValue": "31"}).
+    """
+    score = competitor.get("score")
+    if isinstance(score, dict):
+        score = score.get("value")
+    try:
+        return int(float(score))
+    except (TypeError, ValueError):
+        return None
+
+
+def team_external_id(sport: str, espn_team_id: int | str) -> str:
+    """Namespaced key for teams.external_id.
+
+    ESPN numbers teams per league, so the NBA's Atlanta and the NFL's Atlanta are
+    both team 1 while teams.external_id is unique across the whole table.
+    """
+    return f"{sport.lower()}:{espn_team_id}"
