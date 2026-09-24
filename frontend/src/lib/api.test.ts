@@ -1,4 +1,4 @@
-import { getPlayer, getPlayerStats, listPlayers } from "./api";
+import { getPlayer, getPlayerSchedule, getPlayerStats, listPlayers } from "./api";
 
 describe("player API client", () => {
   beforeEach(() => {
@@ -67,5 +67,52 @@ describe("player API client", () => {
 
     const [url] = (global.fetch as jest.Mock).mock.calls[0];
     expect(url).toContain("/api/v1/players/1/stats?limit=20");
+  });
+
+  it("listPlayers repeats the position param once per position", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], total: 0, limit: 50, offset: 0 }),
+    });
+
+    await listPlayers({ sport: "NFL", positions: ["RB", "WR", "TE"] });
+
+    const [url] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(url).toContain("sport=NFL");
+    expect(url).toContain("position=RB&position=WR&position=TE");
+  });
+
+  it("listPlayers passes the sort and offset through", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [], total: 0, limit: 50, offset: 100 }),
+    });
+
+    await listPlayers({ sport: "NBA", sort: "fantasy_points", limit: 50, offset: 100 });
+
+    const [url] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(url).toContain("sort=fantasy_points");
+    expect(url).toContain("offset=100");
+    expect(url).toContain("limit=50");
+  });
+
+  it("getPlayerSchedule returns null on a 404", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(getPlayerSchedule(999)).resolves.toBeNull();
+  });
+
+  it("getPlayerSchedule fetches the player's schedule", async () => {
+    const schedule = [{ game_id: 1 }];
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => schedule });
+
+    await expect(getPlayerSchedule(7)).resolves.toEqual(schedule);
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain("/api/v1/players/7/schedule");
+  });
+
+  it("getPlayerSchedule throws on other errors", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 500 });
+
+    await expect(getPlayerSchedule(7)).rejects.toThrow("Failed to fetch schedule for player 7: 500");
   });
 });
