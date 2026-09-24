@@ -1,11 +1,18 @@
 import { render, screen } from "@testing-library/react";
 import PlayerDetailPage from "./page";
-import { getPlayer, getPlayerSchedule, getPlayerStats, getScoringPreset } from "@/lib/api";
+import {
+  getPlayer,
+  getPlayerSchedule,
+  getPlayerSeason,
+  getPlayerStats,
+  getScoringPreset,
+} from "@/lib/api";
 import {
   makeEntry,
   makePlayerDetail,
   makeScheduleEntry,
   makeScoringConfig,
+  makeSeasonSummary,
   makeTeam,
   makeUpcoming,
   scheduleFromGames,
@@ -16,6 +23,7 @@ jest.mock("@/lib/api", () => ({
   getPlayerStats: jest.fn(),
   getPlayerSchedule: jest.fn(),
   getScoringPreset: jest.fn(),
+  getPlayerSeason: jest.fn(),
 }));
 
 const notFound = jest.fn(() => {
@@ -34,6 +42,7 @@ const mockedGetPlayerSchedule = getPlayerSchedule as jest.MockedFunction<
 >;
 
 const mockedGetScoringPreset = getScoringPreset as jest.MockedFunction<typeof getScoringPreset>;
+const mockedGetPlayerSeason = getPlayerSeason as jest.MockedFunction<typeof getPlayerSeason>;
 
 async function renderPage(id = "1") {
   render(await PlayerDetailPage({ params: Promise.resolve({ id }) }));
@@ -47,6 +56,8 @@ describe("PlayerDetailPage", () => {
     mockedGetPlayerSchedule.mockResolvedValue([]);
     mockedGetScoringPreset.mockReset();
     mockedGetScoringPreset.mockResolvedValue(null);
+    mockedGetPlayerSeason.mockReset();
+    mockedGetPlayerSeason.mockResolvedValue(null);
     notFound.mockClear();
   });
 
@@ -190,6 +201,30 @@ describe("PlayerDetailPage", () => {
     mockedGetScoringPreset.mockResolvedValue(makeScoringConfig());
     await renderPage();
     expect(screen.getByText(/FPTS uses Test league scoring: Passing yards \+0.04, Receptions \+1/)).toBeInTheDocument();
+  });
+
+  it("shows season totals and ranks in the header when the season summary is available", async () => {
+    mockedGetPlayer.mockResolvedValue(makePlayerDetail({ sport: "NFL", position: "QB" }));
+    mockedGetPlayerStats.mockResolvedValue([makeEntry()]);
+    mockedGetPlayerSeason.mockResolvedValue(makeSeasonSummary());
+
+    await renderPage();
+
+    expect(mockedGetPlayerSeason).toHaveBeenCalledWith(1);
+    const tile = screen.getByRole("group", { name: "Passing yards" });
+    expect(tile).toHaveTextContent("583");
+    expect(tile).toHaveTextContent("#3");
+    expect(tile).toHaveTextContent("of 32 QB");
+  });
+
+  it("falls back to last-10 averages when there is no season summary", async () => {
+    mockedGetPlayer.mockResolvedValue(makePlayerDetail());
+    mockedGetPlayerStats.mockResolvedValue([makeEntry()]);
+    mockedGetPlayerSeason.mockResolvedValue(null);
+
+    await renderPage();
+
+    expect(screen.getByRole("group", { name: "Fantasy pts" })).toHaveTextContent("L10 avg");
   });
 
   it("still renders the page when the scoring can't be fetched", async () => {
