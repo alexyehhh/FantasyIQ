@@ -106,6 +106,9 @@ def get_player(
 def get_player_stats(
     player_id: int,
     limit: int | None = Query(default=None, ge=1, le=200),
+    season: Literal["current", "all"] = Query(
+        default="all", description="'current' for the season in play only, 'all' for every season"
+    ),
     scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
     db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
 ) -> list[PlayerGameStatsEntry]:
@@ -113,6 +116,11 @@ def get_player_stats(
     if player is None:
         raise HTTPException(status_code=404, detail="Player not found")
     config = scoring_or_422(scoring, player.sport)
+    only_season = (
+        players_service.get_current_season(db, player.sport) if season == "current" else None
+    )
+    if season == "current" and only_season is None:
+        return []
 
     return [
         PlayerGameStatsEntry(
@@ -128,7 +136,9 @@ def get_player_stats(
             opponent_score=row.opponent_score,
             result=row.result,
         )
-        for row in players_service.get_player_game_log(db, player, limit=limit)
+        for row in players_service.get_player_game_log(
+            db, player, limit=limit, season=only_season
+        )
     ]
 
 
