@@ -1,11 +1,14 @@
 import { makeEntry } from "@/test/fixtures";
 import {
+  DEFENSE_NEGATIVE_STATS,
   FPTS,
+  KICKS,
   NEGATIVE_STATS,
   STAT_LABELS,
   NBA_LOG_COLUMNS,
   NFL_LOG_COLUMNS,
   average,
+  formatKicks,
   formatStat,
   profileFor,
   statValue,
@@ -32,30 +35,62 @@ describe("profileFor", () => {
     expect(profileFor("NFL", null).tiles).toHaveLength(4);
   });
 
-  it("marks kickers and punters as untracked, since no kicking stats are stored", () => {
-    expect(profileFor("NFL", "PK").tracked).toBe(false);
-    expect(profileFor("NFL", "P").tracked).toBe(false);
-    expect(profileFor("NFL", "PK").tiles).toEqual([]);
+  it("tracks kickers by field goals and extra points, and lists each kick in their game log", () => {
+    const kicker = profileFor("NFL", "PK");
+
+    expect(kicker.tracked).toBe(true);
+    expect(kicker.tiles).toContain("field_goals_made");
+    expect(kicker.logColumns.map((column) => column.key)).toContain(KICKS);
+    expect(kicker.scoringKind).toBe("kicker");
+  });
+
+  it("leaves punters untracked, since no punting stats are stored", () => {
+    const punter = profileFor("NFL", "P");
+
+    expect(punter.tracked).toBe(false);
+    expect(punter.tiles).toEqual([]);
+    expect(punter.logColumns).toEqual([]);
+    expect(punter.untrackedLabel).toBe("Punting");
+  });
+
+  it("gives a team defense its own profile, where fewer points and yards allowed are better", () => {
+    const defense = profileFor("NFL", "DEF");
+
+    expect(defense.scoringKind).toBe("defense");
+    expect(defense.tiles).toEqual(["sacks", "interceptions", "points_allowed", "yards_allowed"]);
+    expect(defense.negativeStats).toBe(DEFENSE_NEGATIVE_STATS);
+    // A defense's interceptions are good news, unlike a quarterback's.
+    expect(defense.negativeStats.has("interceptions")).toBe(false);
+    expect(profileFor("NFL", "QB").negativeStats.has("interceptions")).toBe(true);
   });
 
   it("tracks every other position", () => {
-    for (const position of ["QB", "RB", "WR", "TE", "LB", null]) {
+    for (const position of ["QB", "RB", "WR", "TE", "PK", "DEF", "LB", null]) {
       expect(profileFor("NFL", position).tracked).toBe(true);
     }
     expect(profileFor("NBA", "G").tracked).toBe(true);
   });
 
   it("puts fantasy points first in every profile's rows", () => {
-    for (const position of ["QB", "RB", "WR", "PK"]) {
+    for (const position of ["QB", "RB", "WR", "PK", "DEF"]) {
       expect(profileFor("NFL", position).rows[0]).toBe(FPTS);
     }
     expect(profileFor("NBA", "G").rows[0]).toBe(FPTS);
   });
 
   it("only references stats that have a label", () => {
-    for (const profile of [profileFor("NBA", "G"), profileFor("NFL", "QB"), profileFor("NFL", "K")]) {
+    const profiles = [
+      profileFor("NBA", "G"),
+      profileFor("NFL", "QB"),
+      profileFor("NFL", "PK"),
+      profileFor("NFL", "DEF"),
+    ];
+    for (const profile of profiles) {
       for (const key of [...profile.tiles, ...profile.rows]) {
         expect(STAT_LABELS[key]).toBeDefined();
+      }
+      for (const column of profile.logColumns) {
+        expect(STAT_LABELS[column.key]).toBeDefined();
       }
     }
     for (const column of [...NBA_LOG_COLUMNS, ...NFL_LOG_COLUMNS]) {
@@ -68,14 +103,31 @@ describe("statValue", () => {
   it("reads a raw stat, defaulting to zero when the line lacks it", () => {
     const entry = makeEntry({ stats: { points: 12 } });
 
-    expect(statValue(entry, "points", "NBA")).toBe(12);
-    expect(statValue(entry, "rebounds", "NBA")).toBe(0);
+    expect(statValue(entry, "points")).toBe(12);
+    expect(statValue(entry, "rebounds")).toBe(0);
   });
 
-  it("derives fantasy points from the stat line for the player's sport", () => {
-    const entry = makeEntry({ stats: { points: 10, assists: 2 } });
+  it("takes fantasy points from the backend rather than working them out", () => {
+    const entry = makeEntry({ stats: { points: 10, assists: 2 }, fantasy_points: 42.5 });
 
-    expect(statValue(entry, FPTS, "NBA")).toBe(13);
+    expect(statValue(entry, FPTS)).toBe(42.5);
+  });
+});
+
+describe("formatKicks", () => {
+  it("lists distances in order, marking misses and blocks", () => {
+    expect(
+      formatKicks([
+        { distance: 24, result: "made" },
+        { distance: 43, result: "missed" },
+        { distance: 49, result: "blocked" },
+      ]),
+    ).toBe("24, 43 (miss), 49 (blocked)");
+  });
+
+  it("shows a dash when there were no attempts", () => {
+    expect(formatKicks([])).toBe("—");
+    expect(formatKicks(undefined)).toBe("—");
   });
 });
 
