@@ -1,4 +1,14 @@
-import { getPlayer, getPlayerSchedule, getPlayerStats, listPlayers } from "./api";
+import {
+  getDefense,
+  getDefenseSchedule,
+  getDefenseStats,
+  getPlayer,
+  getPlayerSchedule,
+  getPlayerStats,
+  getScoringPreset,
+  listDefenses,
+  listPlayers,
+} from "./api";
 
 describe("player API client", () => {
   beforeEach(() => {
@@ -114,5 +124,82 @@ describe("player API client", () => {
     (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 500 });
 
     await expect(getPlayerSchedule(7)).rejects.toThrow("Failed to fetch schedule for player 7: 500");
+  });
+});
+
+describe("defense API client", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  it("listDefenses builds the query string and returns the parsed body", async () => {
+    const body = { items: [], total: 0, limit: 50, offset: 50 };
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => body });
+
+    const result = await listDefenses({ search: "bears", sort: "fantasy_points", limit: 50, offset: 50 });
+
+    const [url, options] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(url).toContain("/api/v1/defenses?");
+    expect(url).toContain("search=bears");
+    expect(url).toContain("sort=fantasy_points");
+    expect(url).toContain("offset=50");
+    expect(options).toEqual(expect.objectContaining({ cache: "no-store" }));
+    expect(result).toEqual(body);
+  });
+
+  it("listDefenses throws when the backend responds with an error status", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: false, status: 500 });
+
+    await expect(listDefenses()).rejects.toThrow("Failed to list defenses: 500");
+  });
+
+  it.each([
+    ["getDefense", () => getDefense(7)],
+    ["getDefenseStats", () => getDefenseStats(7)],
+    ["getDefenseSchedule", () => getDefenseSchedule(7)],
+  ])("%s returns null on a 404 and throws on other errors", async (_name, call) => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 404 });
+    await expect(call()).resolves.toBeNull();
+
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 500 });
+    await expect(call()).rejects.toThrow("500");
+  });
+
+  it("getDefenseStats passes the limit and reads /defenses/{id}/stats", async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => [] });
+
+    await getDefenseStats(7, 200);
+
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain("/api/v1/defenses/7/stats?limit=200");
+  });
+});
+
+describe("getScoringPreset", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  it("returns the sport's default scoring config", async () => {
+    const config = { name: "FantasyIQ standard", sport: "NBA" };
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => config });
+
+    await expect(getScoringPreset("NBA")).resolves.toEqual(config);
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain("/api/v1/scoring/presets/NBA");
+  });
+
+  it("returns null instead of throwing when the scoring can't be fetched", async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 500 });
+    await expect(getScoringPreset("NFL")).resolves.toBeNull();
+
+    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error("network down"));
+    await expect(getScoringPreset("NFL")).resolves.toBeNull();
   });
 });
