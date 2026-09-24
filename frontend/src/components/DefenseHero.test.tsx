@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import DefenseHero from "./DefenseHero";
-import { makeDefenseDetail, makeDefenseEntry, makeTeam } from "@/test/fixtures";
+import { makeDefenseDetail, makeDefenseEntry, makeSeasonSummary, makeTeam } from "@/test/fixtures";
 
 describe("DefenseHero", () => {
   it("shows the team, D/ST, its abbreviation and its bye week", () => {
@@ -67,5 +67,27 @@ describe("DefenseHero", () => {
       within(screen.getByRole("group", { name })).getByText(/▲|▼/);
     expect(badge("Points allowed")).toHaveClass("text-bad");
     expect(badge("Sacks")).toHaveClass("text-good");
+  });
+
+  it("shows season totals with the rank among the defenses, fewest allowed first", () => {
+    const season = makeSeasonSummary({
+      position_group: "DEF",
+      stats: {
+        fantasy_points: { total: 34, rank: 1, tied: false },
+        sacks: { total: 8, rank: 2, tied: true },
+        interceptions: { total: 0, rank: 24, tied: true },
+        points_allowed: { total: 26, rank: 5, tied: false },
+        yards_allowed: { total: 656, rank: 11, tied: false },
+      },
+    });
+    render(<DefenseHero defense={makeDefenseDetail()} entries={[makeDefenseEntry()]} season={season} />);
+
+    const fpts = screen.getByRole("group", { name: "Fantasy pts" });
+    expect(fpts).toHaveTextContent("34");
+    expect(fpts).toHaveTextContent("#1");
+    expect(fpts).toHaveTextContent("of 32 DEF");
+    expect(screen.getByRole("group", { name: "Sacks" })).toHaveTextContent("T-#2");
+    expect(screen.getByRole("group", { name: "Points allowed" })).toHaveTextContent("26");
+    expect(screen.getByRole("group", { name: "Points allowed" })).toHaveTextContent("Season");
   });
 });
