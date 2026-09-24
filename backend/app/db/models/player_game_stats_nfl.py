@@ -44,4 +44,12 @@ class PlayerGameStatsNFL(Base):
 
     fumbles_lost: Mapped[int] = mapped_column(default=0)
 
+    field_goals_made: Mapped[int] = mapped_column(default=0)
+    field_goal_attempts: Mapped[int] = mapped_column(default=0)
+    extra_points_made: Mapped[int] = mapped_column(default=0)
+    extra_point_attempts: Mapped[int] = mapped_column(default=0)
+
+    kick_return_touchdowns: Mapped[int] = mapped_column(default=0)
+    punt_return_touchdowns: Mapped[int] = mapped_column(default=0)
+
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
