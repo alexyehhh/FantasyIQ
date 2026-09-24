@@ -3,7 +3,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.db.models import FieldGoalKick, Player, PlayerGameStatsNFL
+from app.db.models import FieldGoalKick, Player, PlayerGameStatsNFL, Team, TeamGameStatsNFL
 from app.db.session import SessionLocal
 from data_pipeline.espn import ESPNClient
 from data_pipeline.espn_common import IngestionError, status_state
@@ -83,7 +83,7 @@ def test_espn_client_merges_stats_across_categories():
     """A QB shows up in both the passing and rushing groups; his stat
     line should combine both rather than only keeping the last group."""
     client = ESPNNFLClient(summary_factory=lambda event_id: _summary_payload())
-    game, stats, _ = client.get_game("401671800")
+    game, stats, _, _ = client.get_game("401671800")
 
     assert game.id == "401671800"
     assert game.season == 2024
@@ -224,7 +224,7 @@ def test_espn_client_reads_real_box_score_where_keys_are_machine_names():
             "athletes": [{"athlete": _mahomes(), "stats": ["3", "1", "1"]}],
         },
     ]
-    _, stats, _ = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+    _, stats, _, _ = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
 
     qb = next(stat for stat in stats if stat.id == 30)
     assert (qb.passing_completions, qb.passing_attempts) == (17, 28)
@@ -275,7 +275,8 @@ def _kicker_payload() -> dict:
 
 
 def test_espn_client_reads_kicking_and_return_touchdowns_from_a_real_box_score():
-    _, stats, _ = ESPNNFLClient(summary_factory=lambda _: _kicker_payload()).get_game("401671800")
+    client = ESPNNFLClient(summary_factory=lambda _: _kicker_payload())
+    _, stats, _, _ = client.get_game("401671800")
 
     kicker = next(stat for stat in stats if stat.id == 40)
     assert (kicker.field_goals_made, kicker.field_goal_attempts) == (2, 3)
@@ -307,7 +308,8 @@ def db():
 
 def test_ingest_game_stores_kicking_and_upserts_on_rerun(db):
     def ingest(payload):
-        game, stats, kicks = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+        client = ESPNNFLClient(summary_factory=lambda _: payload)
+        game, stats, kicks, _ = client.get_game("401671800")
         ingest_game(db, game, stats, kicks)
 
     def kicker_rows():
@@ -433,7 +435,7 @@ def _stored_kicks(db):
 
 
 def _ingest_plays(db, payload):
-    game, stats, kicks = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+    game, stats, kicks, _ = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
     ingest_game(db, game, stats, kicks)
 
 
@@ -456,3 +458,182 @@ def test_ingest_game_leaves_stored_kicks_alone_when_the_payload_has_no_play_data
     _ingest_plays(db, _kicker_payload())  # a summary without drives must not wipe the kicks
 
     assert len(_stored_kicks(db)) == 3
+
+
+def _play(play_id, kind, team_id, home, away, text=""):
+    return {
+        "id": play_id,
+        "type": {"text": kind},
+        "text": text,
+        "start": {"team": {"id": str(team_id)}},
+        "homeScore": home,
+        "awayScore": away,
+    }
+
+
+def _drive(team_id, result, *plays):
+    return {"team": {"id": str(team_id)}, "result": result, "plays": list(plays)}
+
+
+def _team_box(team_id, yards, sacks_taken, interceptions_thrown, fumbles_lost, def_tds):
+    """Team totals as ESPN lists them, including the duplicated "interceptions" entry."""
+    totals = [
+        ("totalYards", yards),
+        ("sacksYardsLost", sacks_taken),
+        ("interceptions", interceptions_thrown),
+        ("fumblesLost", fumbles_lost),
+        ("interceptions", interceptions_thrown),
+        ("defensiveTouchdowns", def_tds),
+    ]
+    return {
+        "team": {"id": str(team_id)},
+        "statistics": [{"name": name, "displayValue": str(value)} for name, value in totals],
+    }
+
+
+def _defense_payload() -> dict:
+    """KC (12, home) beats BUF (2) 17-9. KC's defense scores on a BUF interception, stops BUF
+    on downs and blocks a punt; BUF scores a safety on a KC drive. A play typed "Safety" that
+    was nullified by a penalty must not count."""
+    payload = _summary_payload()
+    home, away = payload["header"]["competitions"][0]["competitors"]
+    home["score"], away["score"] = "17", "9"
+    payload["boxscore"]["teams"] = [
+        _team_box(12, 400, "2-10", 0, 0, 1),
+        _team_box(2, 300, "3-20", 1, 1, 0),
+    ]
+    payload["drives"] = {"previous": [
+        _drive(12, "TD", _play("d1", "Rushing Touchdown", 12, 7, 0)),
+        _drive(2, "INT TD", _play("d2", "Interception Return Touchdown", 2, 14, 0)),
+        _drive(
+            2, "DOWNS",
+            _play("d3a", "Blocked Punt", 2, 14, 0),
+            _play("d3b", "Safety", 2, 14, 0, "SAFETY NULLIFIED by Penalty"),
+        ),
+        _drive(12, "SF", _play("d4", "Pass Incompletion", 12, 14, 2, "Team Safety")),
+        _drive(2, "TD", _play("d5", "Passing Touchdown", 2, 14, 9)),
+        _drive(12, "FG", _play("d6", "Field Goal Good", 12, 17, 9)),
+    ]}
+    payload["scoringPlays"] = [{"scoringType": {"name": "safety"}, "team": {"id": "2"}}]
+    # The defensive-touchdown check needs the FG play's kicker; keep the box score kicker-free.
+    payload["drives"]["previous"][5]["plays"][0]["type"]["text"] = "Punt"
+    return payload
+
+
+def _defense(payload):
+    client = ESPNNFLClient(summary_factory=lambda _: payload)
+    return {line.team_id: line for line in client.get_game("401671800")[3]}
+
+
+def test_team_defense_lines_for_both_teams_from_box_totals_and_drives():
+    kc, buf = _defense(_defense_payload())[12], _defense(_defense_payload())[2]
+
+    assert (kc.sacks, kc.interceptions, kc.fumble_recoveries) == (3, 1, 1)  # BUF's turnovers
+    assert (kc.defensive_touchdowns, kc.return_touchdowns, kc.safeties) == (1, 0, 0)
+    assert (kc.fourth_down_stops, kc.blocked_kicks, kc.yards_allowed) == (1, 1, 300)
+    assert (buf.sacks, buf.interceptions, buf.fumble_recoveries) == (2, 0, 0)
+    assert (buf.defensive_touchdowns, buf.safeties, buf.fourth_down_stops) == (0, 1, 0)
+    assert (buf.blocked_kicks, buf.yards_allowed) == (0, 400)
+
+
+def test_points_allowed_leave_out_the_defensive_touchdown_and_the_safety():
+    lines = _defense(_defense_payload())
+
+    # BUF scored 9, but 2 of it was the safety: only its 7-point touchdown counts against KC.
+    assert lines[12].points_allowed == 7
+    # KC scored 17, but 7 was the interception return with its extra point.
+    assert lines[2].points_allowed == 10
+
+
+def test_a_penalized_safety_play_is_not_counted():
+    payload = _defense_payload()  # the "Safety" play in drive 3 was nullified by a penalty
+
+    assert _defense(payload)[2].safeties == 1  # only the real one, from drive 4
+
+
+def test_return_touchdowns_are_split_from_the_teams_defensive_touchdowns():
+    payload = _defense_payload()
+    payload["boxscore"]["teams"][0] = _team_box(12, 400, "2-10", 0, 0, 2)  # 1 defense + 1 return
+    payload["boxscore"]["players"][0]["statistics"].append({
+        "name": "kickReturns",
+        "keys": ["kickReturns", "kickReturnYards", "yardsPerKickReturn", "longKickReturn",
+                 "kickReturnTouchdowns"],
+        "labels": ["NO", "YDS", "AVG", "LONG", "TD"],
+        "athletes": [{"athlete": _kelce(), "stats": ["2", "153", "76.5", "98", "1"]}],
+    })
+
+    kc = _defense(payload)[12]
+
+    assert (kc.defensive_touchdowns, kc.return_touchdowns) == (1, 1)
+
+
+def test_a_defensive_score_the_drives_do_not_explain_is_rejected():
+    payload = _defense_payload()
+    payload["boxscore"]["teams"][0] = _team_box(12, 400, "2-10", 0, 0, 2)  # no return TD to match
+
+    with pytest.raises(IngestionError, match="defensive touchdowns"):
+        _defense(payload)
+
+
+def test_a_safety_the_scoring_plays_do_not_confirm_is_rejected():
+    payload = _defense_payload()
+    payload["scoringPlays"] = []
+
+    with pytest.raises(IngestionError, match="safeties"):
+        _defense(payload)
+
+
+def test_an_unexpected_defensive_score_size_is_rejected():
+    payload = _defense_payload()
+    payload["drives"]["previous"][1]["plays"][0]["homeScore"] = 17  # a 10-point "touchdown"
+
+    with pytest.raises(IngestionError, match="Unexpected"):
+        _defense(payload)
+
+
+def test_a_game_without_play_data_or_a_final_score_has_no_defense_lines():
+    no_plays = _defense_payload()
+    del no_plays["drives"]
+    no_score = _defense_payload()
+    del no_score["header"]["competitions"][0]["competitors"][0]["score"]
+
+    for payload in (no_plays, no_score):
+        client = ESPNNFLClient(summary_factory=lambda _, p=payload: p)
+        assert client.get_game("1")[3] is None
+
+
+def _ingest_defense(db, payload):
+    client = ESPNNFLClient(summary_factory=lambda _: payload)
+    game, stats, kicks, defense = client.get_game("401671800")
+    ingest_game(db, game, stats, kicks, defense)
+
+
+def _stored_defense(db):
+    query = select(Team.abbreviation, TeamGameStatsNFL).join(
+        Team, TeamGameStatsNFL.team_id == Team.id
+    )
+    return {abbreviation: row for abbreviation, row in db.execute(query)}
+
+
+def test_ingest_game_stores_team_defense_and_upserts_on_rerun(db):
+    _ingest_defense(db, _defense_payload())
+    stored = _stored_defense(db)
+    assert stored["KC"].points_allowed == 7
+    assert stored["BUF"].safeties == 1
+
+    corrected = _defense_payload()
+    corrected["boxscore"]["teams"][1] = _team_box(2, 350, "3-20", 1, 1, 0)
+    _ingest_defense(db, corrected)  # a re-run updates the same rows instead of adding more
+    rows = db.scalars(select(TeamGameStatsNFL)).all()
+    assert len(rows) == 2
+    assert _stored_defense(db)["KC"].yards_allowed == 350
+
+
+def test_ingest_game_leaves_stored_defense_alone_without_play_data(db):
+    _ingest_defense(db, _defense_payload())
+
+    no_plays = _defense_payload()
+    del no_plays["drives"]
+    _ingest_defense(db, no_plays)
+
+    assert _stored_defense(db)["KC"].points_allowed == 7
