@@ -191,8 +191,16 @@ fantasy points and injury status and link to `/players/{id}`. A player page show
   still has games to come, so it moves on to games 21–40 once the first 20 are
   played.
 
-Kickers and punters show their schedule but no stats: no kicking stats are stored
-yet, so there are no fantasy points for them until those are added.
+Kickers and punters show their schedule but no stats yet. Field goals and extra
+points (made and attempted) are stored per game, and NFL ingestion also stores every
+field goal attempt with its distance and result (`field_goal_kicks`, one row per
+play), read from the game's play-by-play because distance isn't in the box score.
+The page and the default scoring don't use them yet, so there are no fantasy points
+for kickers until they do. Ingestion rejects a game whose kicks don't add up to each
+kicker's box-score FG line. Games ingested before the stat tables were widened read 0
+for the new columns (NBA makes and free throws, NFL kicking and return touchdowns) and
+have no kick rows until they are re-ingested; re-running `nba_ingest`/`nfl_ingest` for
+a game is safe.
 
 Fantasy points use FantasyIQ's default scoring, which only needs stats already
 stored. The weights live in both `backend/app/services/scoring.py` (for the
