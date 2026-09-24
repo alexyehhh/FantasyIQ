@@ -25,7 +25,13 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.models import Game, Player, PlayerGameStatsNFL, Team
 from data_pipeline.espn import ESPNClient, ESPNError
-from data_pipeline.espn_common import IngestionError, TeamPayload
+from data_pipeline.espn_common import (
+    IngestionError,
+    TeamPayload,
+    competitor_score,
+    season_label,
+    team_external_id,
+)
 from data_pipeline.espn_common import status_state as _status_state
 from data_pipeline.espn_common import team_payload as _team_payload
 
@@ -39,6 +45,8 @@ class GamePayload(BaseModel):
     status_state: str = Field(pattern=r"^(scheduled|in_progress|final)$")
     home_team: TeamPayload
     visitor_team: TeamPayload
+    home_score: int | None = None
+    visitor_score: int | None = None
 
 
 class PlayerPayload(BaseModel):
@@ -73,7 +81,7 @@ class StatsPayload(BaseModel):
 
 
 def _season_label(season: int) -> str:
-    return str(season)
+    return season_label("NFL", season)
 
 
 def _int(value: Any) -> int:
@@ -102,7 +110,9 @@ def _group_athletes_by_id(team_box: dict[str, Any]) -> dict[int, dict[str, Any]]
     athletes: dict[int, dict[str, Any]] = {}
     for group in team_box.get("statistics", []):
         category = group.get("name", "")
-        key_names = group.get("keys", [])
+        # ESPN sends machine names in "keys" ("passingYards") and display names in
+        # "labels" ("YDS"); the stat mapping below is written against the labels.
+        key_names = group.get("labels") or group.get("keys", [])
         for entry in group.get("athletes", []):
             athlete = entry.get("athlete", entry)
             athlete_id = int(athlete["id"])
@@ -182,6 +192,8 @@ class ESPNNFLClient:
                 status_state=_status_state(header),
                 home_team=home_team,
                 visitor_team=visitor_team,
+                home_score=competitor_score(home),
+                visitor_score=competitor_score(visitor),
             )
             stats: list[StatsPayload] = []
             for team_box in raw.get("boxscore", {}).get("players", []):
@@ -196,9 +208,10 @@ class ESPNNFLClient:
 
 
 def _upsert_team(db: Session, payload: TeamPayload) -> Team:
-    team = db.scalar(select(Team).where(Team.external_id == str(payload.id)))
+    external_id = team_external_id("NFL", payload.id)
+    team = db.scalar(select(Team).where(Team.external_id == external_id))
     if team is None:
-        team = Team(external_id=str(payload.id), sport="NFL")
+        team = Team(external_id=external_id, sport="NFL")
         db.add(team)
     team.name = payload.full_name
     team.abbreviation = payload.abbreviation
@@ -220,16 +233,25 @@ def ingest_game(db: Session, game: GamePayload, stats: list[StatsPayload]) -> in
     record.away_team_id = away_team.id
     record.start_time = game.datetime
     record.status = game.status_state
+    record.home_score = game.home_score
+    record.away_score = game.visitor_score
     db.flush()
     for stat in stats:
         player = db.scalar(select(Player).where(Player.external_id == str(stat.player.id)))
         if player is None:
-            player = Player(external_id=str(stat.player.id), sport="NFL")
+            # A box score only says who a player played for that day, so it seeds a brand-new
+            # player but never overwrites the current team/position/status, which the roster
+            # sync (data_pipeline/espn_directory.py) owns. Otherwise ingesting an old game
+            # would move a traded player back to his former team.
+            player = Player(
+                external_id=str(stat.player.id),
+                sport="NFL",
+                position=stat.player.position,
+                team_id=home_team.id if stat.player.team_id == game.home_team.id else away_team.id,
+                active=True,
+            )
             db.add(player)
         player.name = f"{stat.player.first_name} {stat.player.last_name}"
-        player.position = stat.player.position
-        player.team_id = home_team.id if stat.player.team_id == game.home_team.id else away_team.id
-        player.active = True
         db.flush()
         line = db.scalar(select(PlayerGameStatsNFL).where(
             PlayerGameStatsNFL.player_id == player.id, PlayerGameStatsNFL.game_id == record.id
