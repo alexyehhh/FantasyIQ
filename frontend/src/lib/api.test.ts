@@ -1,9 +1,11 @@
 import {
   getDefense,
   getDefenseSchedule,
+  getDefenseSeason,
   getDefenseStats,
   getPlayer,
   getPlayerSchedule,
+  getPlayerSeason,
   getPlayerStats,
   getScoringPreset,
   listDefenses,
@@ -201,5 +203,41 @@ describe("getScoringPreset", () => {
 
     (global.fetch as jest.Mock).mockRejectedValueOnce(new Error("network down"));
     await expect(getScoringPreset("NFL")).resolves.toBeNull();
+  });
+});
+
+describe("season summary API calls", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  it.each([
+    ["getPlayerSeason", getPlayerSeason, "/api/v1/players/5/season"],
+    ["getDefenseSeason", getDefenseSeason, "/api/v1/defenses/5/season"],
+  ])("%s reads the summary from the season endpoint", async (_name, call, path) => {
+    const body = { season: "2026", games: 2, position_group: "QB", pool_size: 32, stats: {} };
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => body });
+
+    await expect(call(5)).resolves.toEqual(body);
+    expect((global.fetch as jest.Mock).mock.calls[0][0]).toContain(path);
+  });
+
+  it.each([
+    ["getPlayerSeason", getPlayerSeason],
+    ["getDefenseSeason", getDefenseSeason],
+  ])("%s returns null instead of throwing when it can't get a summary", async (_name, call) => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: false, status: 404 });
+    await expect(call(5)).resolves.toBeNull();
+
+    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error("network down"));
+    await expect(call(5)).resolves.toBeNull();
+
+    // A player who hasn't played gets a 200 with a null body.
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true, json: async () => null });
+    await expect(call(5)).resolves.toBeNull();
   });
 });
