@@ -199,6 +199,25 @@ def default_config(sport: str) -> ScoringConfig:
     return DEFAULT_CONFIGS[sport]
 
 
+PRESET_DEFAULT = "default"
+
+
+def resolve_scoring(spec: str | None, sport: str) -> ScoringConfig:
+    """The config a request's `scoring` parameter names, for `sport`.
+
+    `spec` is None or "default" for the sport's FantasyIQ preset, or an inline JSON
+    ScoringConfig. Raises ValueError (pydantic's ValidationError is one) for anything else, an
+    invalid config, or a config for the other sport."""
+    if spec is None or spec == PRESET_DEFAULT:
+        return default_config(sport)
+    if not spec.lstrip().startswith("{"):
+        raise ValueError(f"Unknown scoring preset {spec!r}; use 'default' or an inline JSON config")
+    config = ScoringConfig.model_validate_json(spec)
+    if config.sport != sport:
+        raise ValueError(f"A {config.sport} scoring config can't score {sport}")
+    return config
+
+
 def bracket_points(brackets: Iterable[Bracket], value: float) -> float:
     for bracket in brackets:
         if bracket.contains(value):
@@ -265,4 +284,13 @@ def player_points_expression(config: ScoringConfig, model: Any) -> ColumnElement
         if attempts in columns and made in columns:
             columns[name] = columns[attempts] - columns[made]
     terms = [weight * columns[stat] for stat, weight in config.player_weights.items()]
+    return reduce(add, terms) if terms else literal(0)
+
+
+def defense_points_expression(config: ScoringConfig) -> ColumnElement[Any]:
+    """SQL twin of `score_defense_game`, over TeamGameStatsNFL rows."""
+    model = TeamGameStatsNFL
+    terms = [weight * getattr(model, stat) for stat, weight in config.defense_weights.items()]
+    if config.points_allowed:
+        terms.append(bracket_case(model.points_allowed, config.points_allowed))
     return reduce(add, terms) if terms else literal(0)
