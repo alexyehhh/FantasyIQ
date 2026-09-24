@@ -3,7 +3,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.db.models import Game, Player, Team
+from app.db.models import Game, Player, PlayerGameStats, Team
 from app.db.session import SessionLocal
 from data_pipeline.espn import ESPNClient
 from data_pipeline.nba_ingest import (
@@ -11,6 +11,7 @@ from data_pipeline.nba_ingest import (
     GamePayload,
     IngestionError,
     _attempts,
+    _made,
     _parse_minutes,
     _status_state,
     ingest_game,
@@ -231,3 +232,65 @@ def test_shooting_attempts_are_read_from_real_combined_fields():
     _, stats = ESPNNBAClient(summary_factory=lambda _: payload).get_game("401705000")
 
     assert (stats[0].fga, stats[0].fg3a) == (17, 6)
+
+
+def test_made_and_attempted_are_split_from_espns_shooting_strings():
+    assert (_made("9-17"), _attempts("9-17")) == (9, 17)
+    assert (_made("0-0"), _attempts("0-0")) == (0, 0)
+    assert _made(None) == 0
+    assert _made(4) == 4  # older payloads sent a bare number
+
+
+def _real_box_score_payload() -> dict:
+    """The stat layout of a real ESPN NBA box score, one player line included."""
+    payload = _summary_payload()
+    payload["boxscore"]["players"][0]["statistics"] = [{
+        "keys": [
+            "minutes", "points", "fieldGoalsMade-fieldGoalsAttempted",
+            "threePointFieldGoalsMade-threePointFieldGoalsAttempted",
+            "freeThrowsMade-freeThrowsAttempted", "rebounds", "assists", "turnovers",
+            "steals", "blocks", "offensiveRebounds", "defensiveRebounds", "fouls", "plusMinus",
+        ],
+        "athletes": [{
+            "athlete": _live_player_for_espn(),
+            "stats": ["26", "24", "8-15", "3-8", "5-6", "6", "2", "0", "1", "0", "3", "3", "3",
+                      "-8"],
+        }],
+    }]
+    return payload
+
+
+def test_espn_client_reads_makes_and_free_throws_from_a_real_box_score():
+    _, stats = ESPNNBAClient(summary_factory=lambda _: _real_box_score_payload()).get_game("1")
+
+    line = stats[0]
+    assert (line.pts, line.fgm, line.fga) == (24, 8, 15)
+    assert (line.fg3m, line.fg3a) == (3, 8)
+    assert (line.ftm, line.fta) == (5, 6)
+
+
+def test_a_line_with_more_makes_than_attempts_is_rejected():
+    payload = _real_box_score_payload()
+    payload["boxscore"]["players"][0]["statistics"][0]["athletes"][0]["stats"][4] = "7-6"
+
+    with pytest.raises(IngestionError):
+        ESPNNBAClient(summary_factory=lambda _: payload).get_game("1")
+
+
+def test_ingest_game_stores_makes_and_free_throws_and_upserts_on_rerun(db):
+    def ingest(payload):
+        game, stats = ESPNNBAClient(summary_factory=lambda _: payload).get_game("401705000")
+        ingest_game(db, game, stats)
+
+    ingest(_real_box_score_payload())
+    line = db.scalar(select(PlayerGameStats).join(Player).where(Player.external_id == "70"))
+    assert (line.field_goals_made, line.field_goal_attempts) == (8, 15)
+    assert (line.three_pointers_made, line.three_point_attempts) == (3, 8)
+    assert (line.free_throws_made, line.free_throw_attempts) == (5, 6)
+
+    corrected = _real_box_score_payload()
+    corrected["boxscore"]["players"][0]["statistics"][0]["athletes"][0]["stats"][4] = "6-6"
+    ingest(corrected)  # a re-run updates the same row instead of adding a second one
+    rows = db.scalars(select(PlayerGameStats).join(Player).where(Player.external_id == "70")).all()
+    assert len(rows) == 1
+    assert rows[0].free_throws_made == 6
