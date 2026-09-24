@@ -233,11 +233,35 @@ of a real sample to verify against: extra points returned by the defense, blocke
 points, and three-and-outs. Like the kicks, these rows exist only for games ingested
 since the table was added.
 
-Fantasy points use FantasyIQ's default scoring, which only needs stats already
-stored. The weights live in both `backend/app/services/scoring.py` (for the
-ranking) and `frontend/src/lib/scoring.ts` (for individual games); tests on both
-sides pin the same worked examples so they can't drift. Game dates and times are shown in US
+Fantasy points use FantasyIQ's default scoring. The list ranking uses the backend's
+`ScoringConfig` (`backend/app/services/scoring.py`), while the game log still scores
+individual games with its own copy of the default player weights in
+`frontend/src/lib/scoring.ts`; tests on both sides pin the same worked examples. That
+copy doesn't know about the return-touchdown and extra-point weights added to the
+backend default, and is to be replaced by points computed by the backend. Game dates and times are shown in US
 Pacific time. All backend calls go through `frontend/src/lib/api.ts`.
+
+### Fantasy scoring config
+
+A league's scoring is data: a `ScoringConfig` holds the per-stat weights for players
+(`player_weights`), distance brackets for field goals made and missed
+(`field_goal_made`, `field_goal_missed`), weights for a team defense
+(`defense_weights`) and points-allowed brackets (`points_allowed`). A bracket is an
+inclusive range with an open end allowed (`0-19`, `35+`); a value in no bracket scores
+nothing. A config is validated when it is built: unknown stat names, overlapping
+brackets, backwards ranges and NFL-only scoring on an NBA config are all rejected.
+Missed shots and extra points are derived from attempts minus makes, so a league can
+weight `field_goals_missed`, `free_throws_missed`, `extra_points_missed` and
+`passing_incompletions`.
+
+`default_config("NBA" | "NFL")` gives the FantasyIQ default. Its NFL kicker and defense
+values are one real Yahoo league's settings (field goals 3/3/3/4/5 by distance, missed
+-3/-3/-3/-2/-1, extra points +1/-1, sack 1, interception 2, fumble recovery 2, touchdown
+6, safety 2, blocked kick 2, return touchdown 6, 4th-down stop 1, points allowed 10 down to
+-4). `score_player_game`, `score_defense_game` and `kick_points` apply a config in Python,
+and `list_players(..., scoring=config)` ranks a season under any config in SQL; a test pins
+the two together. Not scored yet: extra points returned and three-and-outs, which aren't
+stored.
 
 ### Seed data (manual sanity check only — not real ingestion)
 
