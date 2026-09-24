@@ -39,7 +39,7 @@ export default function AveragesTable({
         </thead>
         <tbody>
           {rows.map((key) => {
-            const values = entries.map((entry) => statValue(entry, key, sport));
+            const values = entries.map((entry) => statValue(entry, key));
             const isSelected = key === selectedStat;
             const label = STAT_LABELS[key];
             return (
