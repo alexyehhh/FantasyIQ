@@ -10,9 +10,11 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.api.v1.scoring_param import SCORING_PARAM_DESCRIPTION, scoring_or_422
 from app.db.session import get_db
 from app.schemas.players import (
     InjuryReport,
+    KickEntry,
     NextGame,
     PlayerDetail,
     PlayerGameStatsEntry,
@@ -35,12 +37,16 @@ def list_players(
     sort: Literal["name", "fantasy_points"] = "name",
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
     db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
 ) -> PlayerListResponse:
     if sort == "fantasy_points" and sport is None:
         raise HTTPException(
             status_code=422, detail="sport is required to sort by fantasy points"
         )
+    if scoring is not None and sport is None:
+        raise HTTPException(status_code=422, detail="sport is required to choose a scoring")
+    config = scoring_or_422(scoring, sport) if sport else None
     players, total = players_service.list_players(
         db,
         sport=sport,
@@ -50,8 +56,9 @@ def list_players(
         sort=sort,
         limit=limit,
         offset=offset,
+        scoring=config,
     )
-    points = players_service.get_season_fantasy_points(db, players)
+    points = players_service.get_season_fantasy_points(db, players, scoring=config)
     items = []
     for player in players:
         item = PlayerListItem.model_validate(player)
@@ -97,11 +104,13 @@ def get_player(
 def get_player_stats(
     player_id: int,
     limit: int | None = Query(default=None, ge=1, le=200),
+    scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
     db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
 ) -> list[PlayerGameStatsEntry]:
     player = players_service.get_player(db, player_id)
     if player is None:
         raise HTTPException(status_code=404, detail="Player not found")
+    config = scoring_or_422(scoring, player.sport)
 
     return [
         PlayerGameStatsEntry(
@@ -109,6 +118,8 @@ def get_player_stats(
             game_date=row.game.start_time,
             week=row.game.week,
             stats=players_service.serialize_stats_row(row.stats_row),
+            fantasy_points=players_service.game_fantasy_points(config, row),
+            kicks=[KickEntry(distance=d, result=r) for d, r in row.kicks],
             opponent=TeamSummary.model_validate(row.opponent) if row.opponent else None,
             is_home=row.is_home,
             team_score=row.team_score,
