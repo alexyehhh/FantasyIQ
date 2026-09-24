@@ -9,12 +9,20 @@ without needing a cross-connection commit — the session (and its
 uncommitted work) is rolled back at teardown either way.
 """
 
+import json
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db.models import Game, Player, PlayerGameStats, PlayerGameStatsNFL, Team
+from app.db.models import (
+    FieldGoalKick,
+    Game,
+    Player,
+    PlayerGameStats,
+    PlayerGameStatsNFL,
+    Team,
+)
 from app.db.session import SessionLocal, get_db
 from app.main import app
 
@@ -377,3 +385,103 @@ def test_sorting_by_fantasy_points_without_a_sport_is_rejected(client):
 
 def test_unknown_sort_is_rejected(client):
     assert client.get("/api/v1/players", params={"sort": "salary"}).status_code == 422
+
+
+def _kicker_game(db):
+    team = _make_team(db, sport="NFL", abbreviation="KCK")
+    kicker = _make_player(db, team, sport="NFL", name="Kicker", position="PK")
+    game = _make_game(db, team, sport="NFL")
+    db.add(
+        PlayerGameStatsNFL(
+            player_id=kicker.id,
+            game_id=game.id,
+            field_goals_made=2,
+            field_goal_attempts=3,
+            extra_points_made=3,
+            extra_point_attempts=3,
+        )
+    )
+    for index, (distance, result) in enumerate([(24, "made"), (52, "made"), (43, "missed")]):
+        db.add(
+            FieldGoalKick(
+                player_id=kicker.id,
+                game_id=game.id,
+                external_play_id=f"play-{index}",
+                distance=distance,
+                result=result,
+            )
+        )
+    db.flush()
+    return kicker
+
+
+def test_player_stats_report_fantasy_points_and_a_kickers_kicks(client, db):
+    kicker = _kicker_game(db)
+
+    (game,) = client.get(f"/api/v1/players/{kicker.id}/stats").json()
+
+    assert game["kicks"] == [
+        {"distance": 24, "result": "made"},
+        {"distance": 52, "result": "made"},
+        {"distance": 43, "result": "missed"},
+    ]
+    assert game["fantasy_points"] == 9  # 3 + 5 - 2 for the kicks, +3 for the extra points
+
+
+def test_player_stats_score_an_nba_game_and_have_no_kicks(client, db):
+    team = _make_team(db)
+    player = _make_player(db, team)
+    game = _make_game(db, team)
+    db.add(PlayerGameStats(player_id=player.id, game_id=game.id, points=30, rebounds=10,
+                           assists=5, steals=2, blocks=1, turnovers=3))
+    db.flush()
+
+    (entry,) = client.get(f"/api/v1/players/{player.id}/stats").json()
+
+    assert entry["fantasy_points"] == 55.5
+    assert entry["kicks"] == []
+
+
+def test_player_stats_use_an_inline_scoring_config(client, db):
+    kicker = _kicker_game(db)
+    flat = json.dumps({
+        "name": "Flat kicker",
+        "sport": "NFL",
+        "player_weights": {"field_goals_made": 3, "field_goals_missed": -1},
+    })
+
+    (game,) = client.get(f"/api/v1/players/{kicker.id}/stats", params={"scoring": flat}).json()
+
+    assert game["fantasy_points"] == 5  # 6 for two makes, -1 for the miss
+
+
+def test_player_stats_reject_a_config_for_the_other_sport_or_an_unknown_preset(client, db):
+    kicker = _kicker_game(db)
+    nba = json.dumps({"name": "Hoops", "sport": "NBA"})
+
+    wrong_sport = client.get(f"/api/v1/players/{kicker.id}/stats", params={"scoring": nba})
+    unknown = client.get(f"/api/v1/players/{kicker.id}/stats", params={"scoring": "standard"})
+
+    assert wrong_sport.status_code == unknown.status_code == 422
+
+
+def test_player_list_ranks_under_an_inline_scoring_config(client, db):
+    kicker = _kicker_game(db)
+    long_only = json.dumps({
+        "name": "Only 50+ counts", "sport": "NFL",
+        "field_goal_made": [{"min": 50, "points": 10}],
+    })
+
+    default = client.get("/api/v1/players", params={"sport": "NFL", "position": "PK"}).json()
+    custom = client.get(
+        "/api/v1/players", params={"sport": "NFL", "position": "PK", "scoring": long_only}
+    ).json()
+
+    points = lambda body: next(i for i in body["items"] if i["id"] == kicker.id)["fantasy_points"]  # noqa: E731
+    assert (points(default), points(custom)) == (9, 10)
+
+
+def test_choosing_a_scoring_without_a_sport_is_rejected(client):
+    response = client.get("/api/v1/players", params={"scoring": "default"})
+
+    assert response.status_code == 422
