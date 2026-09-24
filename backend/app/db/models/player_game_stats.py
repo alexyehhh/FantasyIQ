@@ -39,7 +39,11 @@ class PlayerGameStats(Base):
     steals: Mapped[int] = mapped_column(default=0)
     blocks: Mapped[int] = mapped_column(default=0)
     turnovers: Mapped[int] = mapped_column(default=0)
+    field_goals_made: Mapped[int] = mapped_column(default=0)
     field_goal_attempts: Mapped[int] = mapped_column(default=0)
+    three_pointers_made: Mapped[int] = mapped_column(default=0)
     three_point_attempts: Mapped[int] = mapped_column(default=0)
+    free_throws_made: Mapped[int] = mapped_column(default=0)
+    free_throw_attempts: Mapped[int] = mapped_column(default=0)
 
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
