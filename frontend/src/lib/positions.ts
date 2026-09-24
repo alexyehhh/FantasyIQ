@@ -10,6 +10,8 @@ export interface PositionFilter {
   positions: string[];
   /** Shown but not selectable yet, with the reason as its tooltip. */
   unavailable?: string;
+  /** Lists team defenses (D/ST) instead of players. */
+  defense?: boolean;
 }
 
 // FB counts as a running back, as in Yahoo.
@@ -20,7 +22,7 @@ export const NFL_POSITION_FILTERS: PositionFilter[] = [
   { label: "TE", positions: ["TE"] },
   { label: "W/R/T", positions: ["RB", "FB", "WR", "TE"] },
   { label: "K", positions: ["PK"] },
-  { label: "DEF", positions: [], unavailable: "Team defenses aren't tracked yet" },
+  { label: "DEF", positions: [], defense: true },
 ];
 
 // ESPN only reports NBA positions as G/F/C (a few players carry the specific PG/SG/SF/PF, which
@@ -42,7 +44,7 @@ export function displayPosition(position: string | null): string | null {
   return position === "PK" ? "K" : position;
 }
 
-/** Kickers and punters: the stat lines we store don't describe them. */
-export function isSpecialTeamer(position: string | null): boolean {
-  return position === "PK" || position === "P";
+/** Punters: we store no punting stats, so they have no fantasy points. (Kickers do.) */
+export function isPunter(position: string | null): boolean {
+  return position === "P";
 }
