@@ -16,13 +16,11 @@ class ESPNClient:
     def __init__(self, timeout: float = 20.0, client: httpx.Client | None = None) -> None:
         self._client = client or httpx.Client(
             base_url="https://site.api.espn.com",
+            # No custom User-Agent on purpose: ESPN's edge answers a browser-style (or
+            # any invented) UA with 403 Access Denied but serves the default httpx one.
             headers={
                 "Accept": "application/json, text/plain, */*",
                 "Referer": "https://www.espn.com/",
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
-                ),
             },
             timeout=timeout,
         )
@@ -31,7 +29,6 @@ class ESPNClient:
             headers={
                 "Accept": "application/json, text/plain, */*",
                 "Referer": "https://www.espn.com/",
-                "User-Agent": self._client.headers.get("User-Agent", "FantasyIQ/0.1"),
             },
             timeout=timeout,
         )
@@ -78,6 +75,21 @@ class ESPNClient:
         if not isinstance(game_package, dict):
             raise ESPNError("Unexpected ESPN CDN game response")
         return game_package
+
+    def teams(self, sport: str, league: str) -> dict[str, Any]:
+        return self.get(sport, league, "teams", limit="100")
+
+    def schedule(
+        self, sport: str, league: str, team_id: str, season_type: int = 2
+    ) -> dict[str, Any]:
+        """A team's full schedule for one season type (2 = regular season).
+
+        Without `seasontype` ESPN returns whichever type is "current", which for
+        the NBA in the offseason is preseason.
+        """
+        return self.get(
+            sport, league, f"teams/{team_id}/schedule", seasontype=str(season_type)
+        )
 
     def roster(self, sport: str, league: str, team_id: str) -> dict[str, Any]:
         return self.get(sport, league, f"teams/{team_id}/roster")
