@@ -5,8 +5,14 @@ import { useEffect, useState } from "react";
 import PlayerAvatar from "@/components/PlayerAvatar";
 import StatusPill from "@/components/StatusPill";
 import TeamLogo from "@/components/TeamLogo";
-import { listPlayers, type PlayerListItem, type Sport } from "@/lib/api";
-import { displayPosition, isSpecialTeamer, positionFiltersFor } from "@/lib/positions";
+import {
+  listDefenses,
+  listPlayers,
+  type DefenseListItem,
+  type PlayerListItem,
+  type Sport,
+} from "@/lib/api";
+import { displayPosition, isPunter, positionFiltersFor } from "@/lib/positions";
 import { formatStat } from "@/lib/stats";
 
 const SPORT_OPTIONS: Sport[] = ["NFL", "NBA"];
@@ -22,12 +28,18 @@ export default function PlayersPage() {
   const [positionLabel, setPositionLabel] = useState(positionFiltersFor("NFL")[0].label);
   const [offset, setOffset] = useState(0);
   const [players, setPlayers] = useState<PlayerListItem[]>([]);
+  const [defenses, setDefenses] = useState<DefenseListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const filters = positionFiltersFor(sport);
-  const positions = filters.find((filter) => filter.label === positionLabel)?.positions;
+  const activeFilter = filters.find((filter) => filter.label === positionLabel);
+  const positions = activeFilter?.positions;
+  // The DEF button lists team defenses rather than players.
+  const isDefense = activeFilter?.defense === true;
+  const shown = isDefense ? defenses.length : players.length;
+  const noun = isDefense ? "defenses" : "players";
 
   // Any change to what's being listed starts again from the top of the ranking.
   const chooseSport = (next: Sport) => {
@@ -53,24 +65,36 @@ export default function PlayersPage() {
     const timeout = setTimeout(() => {
       setLoading(true);
       setError(null);
-      listPlayers({
-        search: search || undefined,
-        sport,
-        positions,
-        sort: "fantasy_points",
-        limit: PAGE_SIZE,
-        offset,
-      })
-        .then((res) => {
-          setPlayers(res.items);
-          setTotal(res.total);
-        })
-        .catch(() => setError("Could not load players. Is the backend running?"))
+      const request = isDefense
+        ? listDefenses({
+            search: search || undefined,
+            sort: "fantasy_points",
+            limit: PAGE_SIZE,
+            offset,
+          }).then((res) => {
+            setDefenses(res.items);
+            setPlayers([]);
+            setTotal(res.total);
+          })
+        : listPlayers({
+            search: search || undefined,
+            sport,
+            positions,
+            sort: "fantasy_points",
+            limit: PAGE_SIZE,
+            offset,
+          }).then((res) => {
+            setPlayers(res.items);
+            setDefenses([]);
+            setTotal(res.total);
+          });
+      request
+        .catch(() => setError(`Could not load ${noun}. Is the backend running?`))
         .finally(() => setLoading(false));
     }, 250);
 
     return () => clearTimeout(timeout);
-  }, [search, sport, positions, offset]);
+  }, [search, sport, positions, offset, isDefense, noun]);
 
   return (
     <main className="mx-auto max-w-[1120px] px-4 pb-14 pt-6">
@@ -162,10 +186,10 @@ export default function PlayersPage() {
         <div
           className={`${ROW_GRID} h-9 border-b border-line bg-surface-2 text-[11.5px] font-bold uppercase tracking-[0.08em] text-ink-3`}
         >
-          <span>Player</span>
+          <span>{isDefense ? "Defense" : "Player"}</span>
           <span>Team</span>
           <span>Pos</span>
-          <span className="max-[860px]:hidden">#</span>
+          <span className="max-[860px]:hidden">{isDefense ? "Bye" : "#"}</span>
           <span className="max-[860px]:hidden">FPTS</span>
           <span className="max-[860px]:hidden">Status</span>
           <span />
@@ -173,15 +197,51 @@ export default function PlayersPage() {
 
         {error && <p className="p-4 text-sm text-bad">{error}</p>}
         {!error && loading && <p className="p-4 text-sm text-ink-3">Loading…</p>}
-        {!error && !loading && players.length === 0 && (
+        {!error && !loading && shown === 0 && (
           <div className="px-4 py-12 text-center text-ink-2">
-            <b>No players found</b>
+            <b>No {noun} found</b>
             <br />
             Try a different name or switch the sport filter.
           </div>
         )}
 
         <ul>
+          {defenses.map((defense) => (
+            <li key={defense.id} className="border-b border-line-2 last:border-b-0">
+              <Link
+                href={`/defenses/${defense.id}`}
+                className={`${ROW_GRID} min-h-[60px] hover:bg-surface-2`}
+              >
+                <span className="flex min-w-0 items-center gap-3">
+                  <TeamLogo team={defense} className="h-9 w-9" />
+                  <span className="truncate text-[15px] font-semibold">{defense.name}</span>
+                </span>
+                <span className="truncate text-ink-2">{defense.abbreviation}</span>
+                <span className="font-bold">DEF</span>
+                <span className="tabular-nums max-[860px]:hidden">
+                  {defense.bye_week !== null ? `Wk ${defense.bye_week}` : "—"}
+                </span>
+                <span className="font-semibold tabular-nums max-[860px]:hidden">
+                  {defense.fantasy_points !== null ? formatStat(defense.fantasy_points) : "—"}
+                </span>
+                <span className="max-[860px]:hidden" />
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                  className="text-ink-3"
+                >
+                  <path d="m9 6 6 6-6 6" />
+                </svg>
+              </Link>
+            </li>
+          ))}
           {players.map((player) => (
             <li key={player.id} className="border-b border-line-2 last:border-b-0">
               <Link
@@ -213,7 +273,7 @@ export default function PlayersPage() {
                   {player.jersey_number !== null ? `#${player.jersey_number}` : "—"}
                 </span>
                 <span className="font-semibold tabular-nums max-[860px]:hidden">
-                  {player.fantasy_points !== null && !isSpecialTeamer(player.position)
+                  {player.fantasy_points !== null && !isPunter(player.position)
                     ? formatStat(player.fantasy_points)
                     : "—"}
                 </span>
@@ -242,8 +302,8 @@ export default function PlayersPage() {
         {!error && !loading && total > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3">
             <span className="text-[12.5px] text-ink-3">
-              Showing {offset + 1}–{offset + players.length} of {total} players, most fantasy
-              points first
+              Showing {offset + 1}–{offset + shown} of {total} {noun}, most fantasy points
+              first
             </span>
             <div className="flex gap-2">
               <button
@@ -256,7 +316,7 @@ export default function PlayersPage() {
               </button>
               <button
                 type="button"
-                disabled={offset + players.length >= total}
+                disabled={offset + shown >= total}
                 onClick={() => turnPage(offset + PAGE_SIZE)}
                 className="rounded-[9px] border border-line px-4 py-2 text-[13px] font-semibold enabled:hover:border-accent enabled:hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
               >
