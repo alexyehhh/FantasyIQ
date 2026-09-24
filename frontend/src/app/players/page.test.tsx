@@ -1,14 +1,24 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import PlayersPage from "./page";
-import { listPlayers } from "@/lib/api";
-import { makePlayerListItem as makePlayerSummary, makeTeam } from "@/test/fixtures";
+import { listDefenses, listPlayers } from "@/lib/api";
+import {
+  makeDefenseListItem,
+  makePlayerListItem as makePlayerSummary,
+  makeTeam,
+} from "@/test/fixtures";
 
 jest.mock("@/lib/api", () => ({
   listPlayers: jest.fn(),
+  listDefenses: jest.fn(),
 }));
 
 const mockedListPlayers = listPlayers as jest.MockedFunction<typeof listPlayers>;
+const mockedListDefenses = listDefenses as jest.MockedFunction<typeof listDefenses>;
+
+function respondWithDefenses(items: ReturnType<typeof makeDefenseListItem>[], total = items.length) {
+  mockedListDefenses.mockResolvedValue({ items, total, limit: 50, offset: 0 });
+}
 
 function respondWith(items: ReturnType<typeof makePlayerSummary>[], total = items.length) {
   mockedListPlayers.mockResolvedValue({ items, total, limit: 50, offset: 0 });
@@ -17,6 +27,7 @@ function respondWith(items: ReturnType<typeof makePlayerSummary>[], total = item
 describe("PlayersPage", () => {
   beforeEach(() => {
     mockedListPlayers.mockReset();
+    mockedListDefenses.mockReset();
   });
 
   it("renders the players returned from the API", async () => {
@@ -126,7 +137,7 @@ describe("PlayersPage", () => {
     );
   });
 
-  it("offers the fantasy position buttons in order, with DEF shown but disabled", () => {
+  it("offers the fantasy position buttons in order, DEF included", () => {
     respondWith([]);
 
     render(<PlayersPage />);
@@ -135,11 +146,7 @@ describe("PlayersPage", () => {
     expect(positions.map((button) => button.textContent)).toEqual([
       "QB", "RB", "WR", "TE", "W/R/T", "K", "DEF",
     ]);
-    expect(screen.getByRole("button", { name: "DEF" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "DEF" })).toHaveAttribute(
-      "title",
-      "Team defenses aren't tracked yet",
-    );
+    expect(screen.getByRole("button", { name: "DEF" })).toBeEnabled();
   });
 
   it.each([
@@ -165,16 +172,97 @@ describe("PlayersPage", () => {
     expect(screen.getByRole("button", { name: "QB" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("does nothing when the disabled DEF button is pressed", async () => {
-    respondWith([]);
-    const user = userEvent.setup();
-    render(<PlayersPage />);
-    await waitFor(() => expect(mockedListPlayers).toHaveBeenCalledTimes(1));
+  describe("the DEF button", () => {
+    it("lists team defenses ranked by fantasy points instead of players", async () => {
+      respondWith([]);
+      respondWithDefenses([
+        makeDefenseListItem(),
+        makeDefenseListItem({ id: 8, name: "Pittsburgh Steelers", abbreviation: "PIT", fantasy_points: 29.5 }),
+      ]);
+      const user = userEvent.setup();
+      render(<PlayersPage />);
+      await waitFor(() => expect(mockedListPlayers).toHaveBeenCalledTimes(1));
 
-    await user.click(screen.getByRole("button", { name: "DEF" }));
+      await user.click(screen.getByRole("button", { name: "DEF" }));
 
-    expect(screen.getByRole("button", { name: "QB" })).toHaveAttribute("aria-pressed", "true");
-    expect(mockedListPlayers).toHaveBeenCalledTimes(1);
+      await waitFor(() =>
+        expect(mockedListDefenses).toHaveBeenLastCalledWith(
+          expect.objectContaining({ sort: "fantasy_points", limit: 50, offset: 0 }),
+        ),
+      );
+      expect(screen.getByRole("button", { name: "DEF" })).toHaveAttribute("aria-pressed", "true");
+      const bengals = await screen.findByRole("link", { name: /Cincinnati Bengals/ });
+      expect(bengals).toHaveAttribute("href", "/defenses/7");
+      expect(bengals).toHaveTextContent("CIN");
+      expect(bengals).toHaveTextContent("DEF");
+      expect(bengals).toHaveTextContent("Wk 6");
+      expect(bengals).toHaveTextContent("34");
+      expect(screen.getByRole("link", { name: /Pittsburgh Steelers/ })).toHaveTextContent("29.5");
+      expect(screen.getByText("Defense")).toBeInTheDocument();
+      expect(screen.getByText("Bye")).toBeInTheDocument();
+    });
+
+    it("searches defenses by the typed text and says where in the ranking the page is", async () => {
+      respondWith([]);
+      respondWithDefenses([makeDefenseListItem()], 32);
+      const user = userEvent.setup();
+      render(<PlayersPage />);
+      await user.click(screen.getByRole("button", { name: "DEF" }));
+      await user.type(screen.getByPlaceholderText("Search by name..."), "bengals");
+
+      await waitFor(() =>
+        expect(mockedListDefenses).toHaveBeenLastCalledWith(
+          expect.objectContaining({ search: "bengals" }),
+        ),
+      );
+      expect(await screen.findByText(/Showing 1–1 of 32 defenses, most fantasy points first/)).toBeInTheDocument();
+    });
+
+    it("pages through defenses 50 at a time", async () => {
+      respondWith([]);
+      respondWithDefenses([makeDefenseListItem()], 120);
+      const user = userEvent.setup();
+      render(<PlayersPage />);
+      await user.click(screen.getByRole("button", { name: "DEF" }));
+      await screen.findByRole("link", { name: /Cincinnati Bengals/ });
+
+      await user.click(screen.getByRole("button", { name: "Next 50" }));
+
+      await waitFor(() =>
+        expect(mockedListDefenses).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 50 })),
+      );
+    });
+
+    it("shows a dash for a defense with no points yet, and says so when none are found", async () => {
+      respondWith([]);
+      respondWithDefenses([makeDefenseListItem({ fantasy_points: null, bye_week: null })]);
+      const user = userEvent.setup();
+      render(<PlayersPage />);
+      await user.click(screen.getByRole("button", { name: "DEF" }));
+
+      const row = await screen.findByRole("link", { name: /Cincinnati Bengals/ });
+      expect(row).toHaveTextContent("—");
+      expect(row).not.toHaveTextContent(/\d\.\d|Wk/);
+
+      respondWithDefenses([]);
+      await user.type(screen.getByPlaceholderText("Search by name..."), "zzz");
+      expect(await screen.findByText("No defenses found")).toBeInTheDocument();
+    });
+
+    it("reports a failure to load defenses, and goes back to players when another position is chosen", async () => {
+      respondWith([makePlayerSummary()]);
+      mockedListDefenses.mockRejectedValue(new Error("down"));
+      const user = userEvent.setup();
+      render(<PlayersPage />);
+      await user.click(screen.getByRole("button", { name: "DEF" }));
+
+      expect(await screen.findByText("Could not load defenses. Is the backend running?")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "QB" }));
+
+      expect(await screen.findByRole("link", { name: /Steph Curry/ })).toBeInTheDocument();
+      expect(screen.getByText("Player")).toBeInTheDocument();
+    });
   });
 
   it("keeps the search term when the position changes", async () => {
@@ -280,16 +368,20 @@ describe("PlayersPage", () => {
       expect(screen.getByText("FPTS")).toBeInTheDocument();
     });
 
-    it("shows a dash for kickers, whose fantasy points aren't tracked", async () => {
+    it("shows a kicker's fantasy points but a dash for a punter, who has none", async () => {
       respondWith([
-        makePlayerSummary({ sport: "NFL", position: "PK", fantasy_points: 0, jersey_number: null }),
+        makePlayerSummary({ id: 1, name: "Kicker Kim", sport: "NFL", position: "PK", fantasy_points: 31 }),
+        makePlayerSummary({
+          id: 2, name: "Punter Pat", sport: "NFL", position: "P", fantasy_points: 0, jersey_number: null,
+        }),
       ]);
 
       render(<PlayersPage />);
 
-      const row = await screen.findByRole("link", { name: /Steph Curry/ });
-      expect(row).not.toHaveTextContent("0"); // no "0" or "0.0" points
-      expect(row).toHaveTextContent("—");
+      expect(await screen.findByRole("link", { name: /Kicker Kim/ })).toHaveTextContent("31");
+      const punter = screen.getByRole("link", { name: /Punter Pat/ });
+      expect(punter).not.toHaveTextContent("0"); // no "0" or "0.0" points
+      expect(punter).toHaveTextContent("—");
     });
 
     it("says where in the ranking the page is", async () => {
