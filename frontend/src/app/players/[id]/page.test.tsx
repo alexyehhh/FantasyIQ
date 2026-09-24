@@ -1,10 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import PlayerDetailPage from "./page";
-import { getPlayer, getPlayerSchedule, getPlayerStats } from "@/lib/api";
+import { getPlayer, getPlayerSchedule, getPlayerStats, getScoringPreset } from "@/lib/api";
 import {
   makeEntry,
   makePlayerDetail,
   makeScheduleEntry,
+  makeScoringConfig,
   makeTeam,
   makeUpcoming,
   scheduleFromGames,
@@ -14,6 +15,7 @@ jest.mock("@/lib/api", () => ({
   getPlayer: jest.fn(),
   getPlayerStats: jest.fn(),
   getPlayerSchedule: jest.fn(),
+  getScoringPreset: jest.fn(),
 }));
 
 const notFound = jest.fn(() => {
@@ -31,6 +33,8 @@ const mockedGetPlayerSchedule = getPlayerSchedule as jest.MockedFunction<
   typeof getPlayerSchedule
 >;
 
+const mockedGetScoringPreset = getScoringPreset as jest.MockedFunction<typeof getScoringPreset>;
+
 async function renderPage(id = "1") {
   render(await PlayerDetailPage({ params: Promise.resolve({ id }) }));
 }
@@ -41,6 +45,8 @@ describe("PlayerDetailPage", () => {
     mockedGetPlayerStats.mockReset();
     mockedGetPlayerSchedule.mockReset();
     mockedGetPlayerSchedule.mockResolvedValue([]);
+    mockedGetScoringPreset.mockReset();
+    mockedGetScoringPreset.mockResolvedValue(null);
     notFound.mockClear();
   });
 
@@ -146,15 +152,55 @@ describe("PlayerDetailPage", () => {
     expect(screen.getByText("No game stats yet")).toBeInTheDocument();
   });
 
-  it("says kickers aren't tracked yet instead of showing zeros", async () => {
-    mockedGetPlayer.mockResolvedValue(makePlayerDetail({ sport: "NFL", position: "PK" }));
+  it("says punting isn't tracked yet instead of showing zeros", async () => {
+    mockedGetPlayer.mockResolvedValue(makePlayerDetail({ sport: "NFL", position: "P" }));
     mockedGetPlayerStats.mockResolvedValue([makeEntry({ stats: { passing_yards: 0 } })]);
     mockedGetPlayerSchedule.mockResolvedValue(makeUpcoming(2));
 
     await renderPage();
 
-    expect(screen.getByText("Stats aren't tracked for this position yet")).toBeInTheDocument();
+    expect(screen.getByText("Punting stats aren't tracked for this position yet")).toBeInTheDocument();
     expect(screen.getByLabelText("Game log")).toHaveTextContent("upcoming");
+  });
+
+  it("shows a kicker's kicks with distances and the kicker scoring note", async () => {
+    mockedGetPlayer.mockResolvedValue(makePlayerDetail({ sport: "NFL", position: "PK" }));
+    mockedGetPlayerStats.mockResolvedValue([
+      makeEntry({
+        stats: { field_goals_made: 1, field_goal_attempts: 2 },
+        fantasy_points: 2,
+        kicks: [
+          { distance: 24, result: "made" },
+          { distance: 43, result: "missed" },
+        ],
+      }),
+    ]);
+    mockedGetScoringPreset.mockResolvedValue(makeScoringConfig());
+
+    await renderPage();
+
+    expect(mockedGetScoringPreset).toHaveBeenCalledWith("NFL");
+    expect(screen.getByRole("cell", { name: "24, 43 (miss)" })).toBeInTheDocument();
+    expect(screen.getByText(/Field goals made 0–39 yds \+3/)).toBeInTheDocument();
+  });
+
+  it("describes the backend's scoring under the game log, and omits it when unavailable", async () => {
+    mockedGetPlayer.mockResolvedValue(makePlayerDetail({ sport: "NFL", position: "WR" }));
+    mockedGetPlayerStats.mockResolvedValue([makeEntry({ stats: { receptions: 5 }, fantasy_points: 5 })]);
+    mockedGetScoringPreset.mockResolvedValue(makeScoringConfig());
+    await renderPage();
+    expect(screen.getByText(/FPTS uses Test league scoring: Passing yards \+0.04, Receptions \+1/)).toBeInTheDocument();
+  });
+
+  it("still renders the page when the scoring can't be fetched", async () => {
+    mockedGetPlayer.mockResolvedValue(makePlayerDetail());
+    mockedGetPlayerStats.mockResolvedValue([makeEntry()]);
+    mockedGetScoringPreset.mockResolvedValue(null);
+
+    await renderPage();
+
+    expect(screen.getByLabelText("Game log")).toBeInTheDocument();
+    expect(screen.queryByText(/FPTS uses/)).not.toBeInTheDocument();
   });
 
   it("shows the opponent and result in the game log", async () => {
