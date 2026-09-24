@@ -157,6 +157,10 @@ GET /api/v1/players?sport=NFL&position=RB&position=WR&search=smith&sort=fantasy_
 GET /api/v1/players/{id}
 GET /api/v1/players/{id}/stats?limit=10
 GET /api/v1/players/{id}/schedule
+GET /api/v1/defenses?search=bears&sort=fantasy_points&limit=50&offset=0
+GET /api/v1/defenses/{team_id}
+GET /api/v1/defenses/{team_id}/stats?limit=10
+GET /api/v1/defenses/{team_id}/schedule
 ```
 
 Each player includes `team` (name, abbreviation, logo, color), `headshot_url`
@@ -180,6 +184,30 @@ line most-recent-first; the shape of `stats` depends on the player's sport
 since the two sports are stored in separate tables (see §9 of the
 architecture doc). Business logic lives in `app/services/players.py`,
 called by both this API and, later, the AI tool layer.
+
+### Scoring in the API
+
+Every endpoint that scores (the players list and `/players/{id}/stats`, and all the
+defense endpoints that return points) takes a `scoring` query parameter: `default` (or
+omitted) for the FantasyIQ scoring of the sport, or an inline JSON `ScoringConfig`, for
+example
+
+```
+GET /api/v1/players/123/stats?scoring={"name":"Flat kicker","sport":"NFL","player_weights":{"field_goals_made":3}}
+```
+
+An invalid config, an unknown preset, or a config for the other sport is a `422` that says
+why. Choosing a `scoring` on the players list needs a `sport`. The JSON travels in the URL,
+so it suits a config of a few hundred bytes; saved per-league configs will replace that once
+leagues can be linked.
+
+Each entry of `/players/{id}/stats` carries `fantasy_points` for that game under the chosen
+scoring, and an NFL kicker's entries carry `kicks` (`distance` and `result`: `made`,
+`missed` or `blocked`). A team defense (D/ST) is an NFL team, addressed by team id:
+`/defenses` lists and ranks them, `/defenses/{team_id}` gives the team with its bye week and
+next game, `/stats` the game log (sacks, interceptions, points allowed, ... plus
+`fantasy_points`), and `/schedule` the season. The other endpoints work the same way as
+the player ones.
 
 ### Frontend player pages
 
