@@ -21,9 +21,11 @@ from app.schemas.players import (
     PlayerListItem,
     PlayerListResponse,
     ScheduleEntry,
+    SeasonSummary,
     TeamSummary,
 )
 from app.services import players as players_service
+from app.services import season_summary as season_summary_service
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -153,3 +155,20 @@ def get_player_schedule(
         )
         for matchup in players_service.get_player_schedule(db, player)
     ]
+
+
+@router.get("/{player_id}/season", response_model=SeasonSummary | None)
+def get_player_season(
+    player_id: int,
+    scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
+    db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
+) -> SeasonSummary | None:
+    """The player's season totals with their rank among the same position; null when they
+    haven't played this season."""
+    player = players_service.get_player(db, player_id)
+    if player is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+    config = scoring_or_422(scoring, player.sport)
+
+    summary = season_summary_service.get_player_season_summary(db, player, scoring=config)
+    return SeasonSummary.model_validate(summary, from_attributes=True) if summary else None
