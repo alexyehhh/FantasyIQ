@@ -1,9 +1,8 @@
-import type { PlayerDetail, PlayerGameStatsEntry } from "@/lib/api";
+import type { NextGame, PlayerDetail, PlayerGameStatsEntry, Sport } from "@/lib/api";
 import { formatGameDateTime } from "@/lib/format";
 import { displayPosition } from "@/lib/positions";
 import {
   FPTS,
-  NEGATIVE_STATS,
   STAT_LABELS,
   average,
   formatStat,
@@ -74,17 +73,22 @@ export default function PlayerHero({ player, entries }: PlayerHeroProps) {
       </div>
 
       {profile.tracked && (
-        <Tiles sport={player.sport} entries={entries} tiles={[FPTS, ...profile.tiles]} />
+        <Tiles
+          sport={player.sport}
+          entries={entries}
+          tiles={[FPTS, ...profile.tiles]}
+          negativeStats={profile.negativeStats}
+        />
       )}
     </section>
   );
 }
 
-function NextGameBlock({
+export function NextGameBlock({
   nextGame,
   hasTeam,
 }: {
-  nextGame: PlayerDetail["next_game"];
+  nextGame: NextGame | null;
   hasTeam: boolean;
 }) {
   if (!hasTeam) return null;
@@ -116,24 +120,26 @@ function NextGameBlock({
   );
 }
 
-function Tiles({
+export function Tiles({
   sport,
   entries,
   tiles,
+  negativeStats,
 }: {
-  sport: PlayerDetail["sport"];
+  sport: Sport;
   entries: PlayerGameStatsEntry[];
   tiles: string[];
+  negativeStats: ReadonlySet<string>;
 }) {
   const total = entries.length;
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-[1.25fr_repeat(4,1fr)]">
       {tiles.map((key, index) => {
-        const values = entries.map((entry) => statValue(entry, key, sport));
+        const values = entries.map((entry) => statValue(entry, key));
         const last10 = average(values.slice(0, 10));
         const change = average(values.slice(0, 5)) - average(values);
-        const goodChange = NEGATIVE_STATS.has(key) ? change < 0 : change > 0;
+        const goodChange = negativeStats.has(key) ? change < 0 : change > 0;
         const flat = Math.abs(change) < 0.05;
         const label = STAT_LABELS[key];
         const first = index === 0;
