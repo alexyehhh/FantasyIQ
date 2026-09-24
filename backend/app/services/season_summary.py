@@ -1,5 +1,5 @@
 """
-Season totals and where they rank.
+Season totals and where they rank, for the current season (see get_current_season).
 
 A player's header shows their season totals for the stats that matter at their position, each
 with its rank among the other players at that position (a team defense ranks among the other
@@ -112,11 +112,12 @@ def _summarize(
 def get_player_season_summary(
     db: Session, player: Player, scoring: ScoringConfig | None = None
 ) -> SeasonSummary | None:
-    """A player's totals for the latest season with stats, ranked within their position group.
+    """A player's totals for the current season, ranked within their position group.
 
-    None when the player has no position, or hasn't played that season."""
+    None when the player has no position, or hasn't played this season (before a season's first
+    game, last season's stats are history and aren't summarized)."""
     grouping = position_group(player.sport, player.position)
-    season = players_service._stats_season(db, player.sport)
+    season = players_service.get_current_season(db, player.sport)
     if grouping is None or season is None:
         return None
     group, codes = grouping
@@ -163,8 +164,8 @@ def get_player_season_summary(
 def get_defense_season_summary(
     db: Session, team: Team, scoring: ScoringConfig | None = None
 ) -> SeasonSummary | None:
-    """A team defense's totals for the latest season with defense stats, ranked among defenses."""
-    season = defenses_service._stats_season(db)
+    """A team defense's totals for the current season, ranked among defenses."""
+    season = players_service.get_current_season(db, "NFL")
     if season is None:
         return None
 
