@@ -1,53 +1,83 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import StatChart from "./StatChart";
-import type { PlayerGameStatsEntry } from "@/lib/api";
+import StatChart, { rangeOptions } from "./StatChart";
+import { makeNbaGames } from "@/test/fixtures";
 
-const nbaEntries: PlayerGameStatsEntry[] = [
-  {
-    game_id: 2,
-    game_date: "2026-01-10T00:00:00Z",
-    stats: { points: 30, rebounds: 5, assists: 7 },
-  },
-  {
-    game_id: 1,
-    game_date: "2026-01-05T00:00:00Z",
-    stats: { points: 22, rebounds: 8, assists: 4 },
-  },
-];
+const STAT_OPTIONS = ["fpts", "points", "rebounds"];
+
+function renderChart(overrides: Partial<React.ComponentProps<typeof StatChart>> = {}) {
+  const props = {
+    sport: "NBA" as const,
+    entries: makeNbaGames(12),
+    stat: "points",
+    onStatChange: jest.fn(),
+    statOptions: STAT_OPTIONS,
+    range: 10 as const,
+    onRangeChange: jest.fn(),
+    ...overrides,
+  };
+  render(<StatChart {...props} />);
+  return props;
+}
+
+describe("rangeOptions", () => {
+  it("offers last 5, last 10 and all when there are more than 10 games", () => {
+    expect(rangeOptions(20).map((o) => o.label)).toEqual(["Last 5", "Last 10", "All 20"]);
+  });
+
+  it("only offers ranges that are smaller than the games played", () => {
+    expect(rangeOptions(8).map((o) => o.label)).toEqual(["Last 5", "All 8"]);
+    expect(rangeOptions(3).map((o) => o.label)).toEqual(["All 3"]);
+  });
+});
 
 describe("StatChart", () => {
-  it("shows a fallback message when there are no game stats", () => {
-    render(<StatChart sport="NBA" entries={[]} />);
-    expect(screen.getByText("No game stats yet.")).toBeInTheDocument();
+  it("shows a chip for each stat with the charted one pressed", () => {
+    renderChart();
+
+    expect(screen.getByRole("button", { name: "Points" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Rebounds" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Fantasy pts" })).toBeInTheDocument();
   });
 
-  it("defaults to the sport's preferred stat and lists all available stats as options", () => {
-    render(<StatChart sport="NBA" entries={nbaEntries} />);
+  it("reports the chosen stat when a chip is clicked", async () => {
+    const props = renderChart();
 
-    const select = screen.getByLabelText("Stat") as HTMLSelectElement;
-    expect(select.value).toBe("points");
-    expect(screen.getByRole("option", { name: "rebounds" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "assists" })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Rebounds" }));
+
+    expect(props.onStatChange).toHaveBeenCalledWith("rebounds");
   });
 
-  it("switches the charted stat when a different option is selected", async () => {
-    const user = userEvent.setup();
-    render(<StatChart sport="NBA" entries={nbaEntries} />);
+  it("reports the chosen range when a range button is clicked", async () => {
+    const props = renderChart();
 
-    const select = screen.getByLabelText("Stat") as HTMLSelectElement;
-    await user.selectOptions(select, "assists");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Last 5" }));
 
-    expect(select.value).toBe("assists");
+    expect(props.onRangeChange).toHaveBeenCalledWith(5);
   });
 
-  it("falls back to the first stat key when the sport has no preferred stat present", () => {
-    const entries: PlayerGameStatsEntry[] = [
-      { game_id: 1, game_date: "2026-01-05T00:00:00Z", stats: { fumbles_lost: 1 } },
-    ];
-    render(<StatChart sport="NFL" entries={entries} />);
+  it("shows the average of the games in the selected range", () => {
+    // 12 games scoring 21..32, newest first: the last 5 are 28..32 (avg 30).
+    renderChart({ range: 5 });
 
-    const select = screen.getByLabelText("Stat") as HTMLSelectElement;
-    expect(select.value).toBe("fumbles_lost");
+    expect(screen.getByText("30")).toBeInTheDocument();
+    expect(screen.getByText(/Points per game · last 5/)).toBeInTheDocument();
+  });
+
+  it("hides the range control when there is only one range to show", () => {
+    renderChart({ entries: makeNbaGames(3), range: "all" });
+
+    expect(screen.queryByRole("group", { name: "Games shown" })).not.toBeInTheDocument();
+  });
+
+  it("describes the chart for screen readers", () => {
+    renderChart({ range: 5 });
+
+    expect(
+      screen.getByRole("img", { name: "Points over 5 games, average 30" }),
+    ).toBeInTheDocument();
   });
 });
