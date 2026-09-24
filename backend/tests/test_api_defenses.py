@@ -182,3 +182,25 @@ def test_defense_schedule_lists_played_and_upcoming_games(client, league):
     assert [(g["week"], g["status"]) for g in schedule] == [(1, "final"), (2, "scheduled")]
     assert schedule[0]["result"] == "W" and schedule[1]["result"] is None
     assert schedule[1]["opponent"]["abbreviation"] == "CHA"
+
+
+def test_defense_season_reports_totals_and_the_rank_among_defenses(client, league):
+    body = client.get(f"/api/v1/defenses/{league['alpha'].id}/season").json()
+
+    assert (body["position_group"], body["games"], body["season"]) == ("DEF", 1, "2026")
+    assert body["stats"]["sacks"]["total"] == 3
+    assert body["stats"]["fantasy_points"] == {"total": 9.0, "rank": 1, "tied": False}
+    # Alpha allowed 7 and Bravo 31: fewer is better, so Alpha ranks first.
+    assert body["stats"]["points_allowed"]["rank"] == 1
+    other = client.get(f"/api/v1/defenses/{league['bravo'].id}/season").json()
+    assert other["stats"]["points_allowed"]["rank"] == 2
+
+
+def test_defense_season_is_null_before_it_has_played_and_404_for_non_defenses(client, league, db):
+    charlie = client.get(f"/api/v1/defenses/{league['charlie'].id}/season")
+    hoops = _team(db, "Hoops", "HPS", sport="NBA")
+
+    assert charlie.status_code == 200 and charlie.json() is None
+    assert client.get(f"/api/v1/defenses/{hoops.id}/season").status_code == 404
+    bad = client.get(f"/api/v1/defenses/{league['alpha'].id}/season", params={"scoring": "nope"})
+    assert bad.status_code == 422
