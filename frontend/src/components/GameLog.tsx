@@ -4,14 +4,16 @@ import { useRef, useState } from "react";
 import type { Sport } from "@/lib/api";
 import { formatGameDate, formatGameTime } from "@/lib/format";
 import type { LogRow } from "@/lib/gameLog";
-import { DEFAULT_SCORING } from "@/lib/scoring";
 import {
   FPTS,
+  KICKS,
   NBA_LOG_COLUMNS,
   NFL_LOG_COLUMNS,
   STAT_LABELS,
+  formatKicks,
   formatStat,
   statValue,
+  type LogColumn,
 } from "@/lib/stats";
 
 interface GameLogProps {
@@ -22,7 +24,17 @@ interface GameLogProps {
   selectedStat: string;
   /** False for positions whose stat lines we don't store: the log is then just the schedule. */
   showStats?: boolean;
+  /** The stat columns to show; defaults to the sport's player columns. */
+  columns?: LogColumn[];
+  /** Stats where fewer is better, so their best game isn't the highest one. */
+  negativeStats?: ReadonlySet<string>;
+  /** The "FPTS uses ... scoring" line under the table, if the scoring is known. */
+  scoringNote?: string | null;
 }
+
+// A zero is dimmed to a dash in an NFL log, except where zero is the result: fantasy points, and a
+// defense's shutout or its yards allowed.
+const NEVER_DIMMED = new Set([FPTS, "points_allowed", "yards_allowed"]);
 
 // A full NBA season is 82 games, so the log shows one page of 20 at a time. Pages are
 // counted from the season's first game: games 1-20, 21-40, and so on.
@@ -33,15 +45,6 @@ const CELL = "whitespace-nowrap px-2.5 py-[11px] text-right tabular-nums";
 const PAGER_BUTTON =
   "rounded-[9px] border border-line px-4 py-2 text-[13px] font-semibold enabled:hover:border-accent enabled:hover:text-accent disabled:cursor-not-allowed disabled:opacity-45";
 const META_CELL = "whitespace-nowrap border-b border-line-2 px-2.5 py-[11px] text-left group-hover:bg-surface-2";
-
-export function describeScoring(sport: Sport): string {
-  const { name, weights } = DEFAULT_SCORING[sport];
-  const terms = Object.entries(weights).map(
-    ([stat, weight]) =>
-      `${STAT_LABELS[stat].name} ${weight < 0 ? "−" : "+"}${Math.abs(weight)}`,
-  );
-  return `FPTS uses ${name} scoring: ${terms.join(", ")}.`;
-}
 
 /**
  * Everything when it fits on one page. Otherwise the first page that isn't yet
@@ -56,7 +59,15 @@ function openingPage(rows: LogRow[]): [number, number] {
   return [start, Math.min(rows.length, start + PAGE_SIZE)];
 }
 
-export default function GameLog({ sport, rows, selectedStat, showStats = true }: GameLogProps) {
+export default function GameLog({
+  sport,
+  rows,
+  selectedStat,
+  showStats = true,
+  columns: columnsProp,
+  negativeStats,
+  scoringNote,
+}: GameLogProps) {
   const [[start, end], setWindow] = useState(() => openingPage(rows));
   const section = useRef<HTMLElement>(null);
   // The pager sits below the table, so a new page should start back at the top of the log.
@@ -64,7 +75,9 @@ export default function GameLog({ sport, rows, selectedStat, showStats = true }:
     setWindow([from, to]);
     section.current?.scrollIntoView({ block: "start" });
   };
-  const columns = !showStats ? [] : sport === "NBA" ? NBA_LOG_COLUMNS : NFL_LOG_COLUMNS;
+  const defaultColumns = sport === "NBA" ? NBA_LOG_COLUMNS : NFL_LOG_COLUMNS;
+  const columns = !showStats ? [] : (columnsProp ?? defaultColumns);
+  const lowerIsBetter = negativeStats?.has(selectedStat) ?? false;
   const groups: { name: string; span: number }[] = [];
   for (const column of columns) {
     const last = groups[groups.length - 1];
@@ -75,7 +88,7 @@ export default function GameLog({ sport, rows, selectedStat, showStats = true }:
   const played = rows.filter((row) => row.kind === "played").length;
   const upcoming = rows.filter((row) => row.kind === "upcoming").length;
   const best = Math.max(
-    ...rows.map((row) => (row.entry ? statValue(row.entry, selectedStat, sport) : -Infinity)),
+    ...rows.map((row) => (row.entry ? statValue(row.entry, selectedStat) : -Infinity)),
   );
   const startsGroup = (index: number) =>
     grouped && index > 0 && columns[index - 1].group !== columns[index].group;
@@ -192,10 +205,25 @@ export default function GameLog({ sport, rows, selectedStat, showStats = true }:
                   </td>
                   {row.entry
                     ? columns.map((column, index) => {
-                        const value = statValue(row.entry!, column.key, sport);
-                        const dim = sport === "NFL" && column.key !== FPTS && value === 0;
+                        if (column.key === KICKS) {
+                          return (
+                            <td
+                              key={column.key}
+                              className={`${CELL} border-b border-line-2 group-hover:bg-surface-2 ${
+                                startsGroup(index) ? "border-l border-l-line" : ""
+                              }`}
+                            >
+                              {formatKicks(row.entry!.kicks)}
+                            </td>
+                          );
+                        }
+                        const value = statValue(row.entry!, column.key);
+                        const dim = sport === "NFL" && !NEVER_DIMMED.has(column.key) && value === 0;
                         const isBest =
-                          column.key === selectedStat && value === best && best > 0;
+                          column.key === selectedStat &&
+                          !lowerIsBetter &&
+                          value === best &&
+                          best > 0;
                         return (
                           <td
                             key={column.key}
@@ -251,10 +279,8 @@ export default function GameLog({ sport, rows, selectedStat, showStats = true }:
           </button>
         </div>
       )}
-      {showStats && (
-        <p className="border-t border-line px-4 py-3 text-xs text-ink-3 sm:px-5">
-          {describeScoring(sport)}
-        </p>
+      {showStats && scoringNote && (
+        <p className="border-t border-line px-4 py-3 text-xs text-ink-3 sm:px-5">{scoringNote}</p>
       )}
     </section>
   );
