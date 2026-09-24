@@ -62,7 +62,7 @@ export default function StatChart({
   const points: ChartPoint[] = [...shown].reverse().map((entry) => ({
     gameId: entry.game_id,
     label: formatGameDate(entry.game_date),
-    value: statValue(entry, stat, sport),
+    value: statValue(entry, stat),
     detail: [
       formatGameDate(entry.game_date),
       entry.opponent ? `${entry.is_home ? "vs" : "@"} ${entry.opponent.abbreviation}` : null,
