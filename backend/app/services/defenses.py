@@ -119,15 +119,19 @@ class DefenseLogRow(Matchup):
 
 
 def get_defense_game_log(
-    db: Session, team: Team, *, limit: int | None = None
+    db: Session, team: Team, *, limit: int | None = None, season: str | None = None
 ) -> list[DefenseLogRow]:
-    """A defense's stat lines with opponent and score, most recent game first."""
+    """A defense's stat lines with opponent and score, most recent game first.
+
+    `season` limits it to one season's games (the default is every season)."""
     query = (
         select(TeamGameStatsNFL, Game)
         .join(Game, TeamGameStatsNFL.game_id == Game.id)
         .where(TeamGameStatsNFL.team_id == team.id)
         .order_by(Game.start_time.desc())
     )
+    if season is not None:
+        query = query.where(Game.season == season)
     if limit is not None:
         query = query.limit(limit)
     rows = list(db.execute(query).all())
