@@ -1,13 +1,17 @@
 import httpx
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import select
 
+from app.db.models import FieldGoalKick, Player, PlayerGameStatsNFL
+from app.db.session import SessionLocal
 from data_pipeline.espn import ESPNClient
 from data_pipeline.espn_common import IngestionError, status_state
 from data_pipeline.nfl_ingest import (
     ESPNNFLClient,
     GamePayload,
     _split_completions_attempts,
+    ingest_game,
 )
 
 
@@ -79,7 +83,7 @@ def test_espn_client_merges_stats_across_categories():
     """A QB shows up in both the passing and rushing groups; his stat
     line should combine both rather than only keeping the last group."""
     client = ESPNNFLClient(summary_factory=lambda event_id: _summary_payload())
-    game, stats = client.get_game("401671800")
+    game, stats, _ = client.get_game("401671800")
 
     assert game.id == "401671800"
     assert game.season == 2024
@@ -220,7 +224,7 @@ def test_espn_client_reads_real_box_score_where_keys_are_machine_names():
             "athletes": [{"athlete": _mahomes(), "stats": ["3", "1", "1"]}],
         },
     ]
-    _, stats = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+    _, stats, _ = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
 
     qb = next(stat for stat in stats if stat.id == 30)
     assert (qb.passing_completions, qb.passing_attempts) == (17, 28)
@@ -228,3 +232,227 @@ def test_espn_client_reads_real_box_score_where_keys_are_machine_names():
     assert qb.fumbles_lost == 1
     te = next(stat for stat in stats if stat.id == 31)
     assert (te.receptions, te.receiving_targets, te.receiving_yards) == (4, 5, 43)
+
+
+def _zvada() -> dict:
+    return {
+        "id": "40",
+        "firstName": "Dominic",
+        "lastName": "Zvada",
+        "displayName": "Dominic Zvada",
+        "position": {"abbreviation": "PK"},
+        "jersey": "3",
+    }
+
+
+def _kicker_payload() -> dict:
+    """A real ESPN kicking/return layout: the kicker has FG/XP, a returner has TDs."""
+    payload = _summary_payload()
+    payload["boxscore"]["players"][0]["statistics"] = [
+        {
+            "name": "kicking",
+            "keys": ["fieldGoalsMade/fieldGoalAttempts", "fieldGoalPct", "longFieldGoalMade",
+                     "extraPointsMade/extraPointAttempts", "totalKickingPoints"],
+            "labels": ["FG", "PCT", "LONG", "XP", "PTS"],
+            "athletes": [{"athlete": _zvada(), "stats": ["2/3", "66.7", "52", "3/3", "9"]}],
+        },
+        {
+            "name": "kickReturns",
+            "keys": ["kickReturns", "kickReturnYards", "yardsPerKickReturn", "longKickReturn",
+                     "kickReturnTouchdowns"],
+            "labels": ["NO", "YDS", "AVG", "LONG", "TD"],
+            "athletes": [{"athlete": _kelce(), "stats": ["2", "153", "76.5", "98", "1"]}],
+        },
+        {
+            "name": "puntReturns",
+            "keys": ["puntReturns", "puntReturnYards", "yardsPerPuntReturn", "longPuntReturn",
+                     "puntReturnTouchdowns"],
+            "labels": ["NO", "YDS", "AVG", "LONG", "TD"],
+            "athletes": [{"athlete": _kelce(), "stats": ["1", "70", "70.0", "70", "1"]}],
+        },
+    ]
+    return payload
+
+
+def test_espn_client_reads_kicking_and_return_touchdowns_from_a_real_box_score():
+    _, stats, _ = ESPNNFLClient(summary_factory=lambda _: _kicker_payload()).get_game("401671800")
+
+    kicker = next(stat for stat in stats if stat.id == 40)
+    assert (kicker.field_goals_made, kicker.field_goal_attempts) == (2, 3)
+    assert (kicker.extra_points_made, kicker.extra_point_attempts) == (3, 3)
+    assert (kicker.kick_return_touchdowns, kicker.punt_return_touchdowns) == (0, 0)
+    # Both return groups label their touchdowns "TD"; each must land in its own column.
+    returner = next(stat for stat in stats if stat.id == 31)
+    assert (returner.kick_return_touchdowns, returner.punt_return_touchdowns) == (1, 1)
+    assert returner.field_goal_attempts == 0
+
+
+def test_a_kick_line_with_more_makes_than_attempts_is_rejected():
+    payload = _kicker_payload()
+    payload["boxscore"]["players"][0]["statistics"][0]["athletes"][0]["stats"][0] = "4/3"
+
+    with pytest.raises(IngestionError):
+        ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+
+
+@pytest.fixture
+def db():
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()
+
+
+def test_ingest_game_stores_kicking_and_upserts_on_rerun(db):
+    def ingest(payload):
+        game, stats, kicks = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+        ingest_game(db, game, stats, kicks)
+
+    def kicker_rows():
+        return db.scalars(
+            select(PlayerGameStatsNFL).join(Player).where(Player.external_id == "40")
+        ).all()
+
+    ingest(_kicker_payload())
+    (row,) = kicker_rows()
+    assert (row.field_goals_made, row.field_goal_attempts) == (2, 3)
+    assert (row.extra_points_made, row.extra_point_attempts) == (3, 3)
+
+    corrected = _kicker_payload()
+    corrected["boxscore"]["players"][0]["statistics"][0]["athletes"][0]["stats"][0] = "3/3"
+    ingest(corrected)  # re-running the game updates the row rather than duplicating it
+    (row,) = kicker_rows()
+    assert row.field_goals_made == 3
+
+
+def _kick_play(play_id: str, kind: str, text: str, distance: int, team_id: str = "12") -> dict:
+    """A field goal play as ESPN sends it. `teamParticipants` lists both teams with the
+    kicking team not necessarily first, so the kicking team must come from `start.team`."""
+    return {
+        "id": play_id,
+        "type": {"text": kind},
+        "text": text,
+        "statYardage": distance,
+        "start": {"team": {"id": team_id}},
+        "teamParticipants": [{"id": "2"}, {"id": "12"}],
+    }
+
+
+def _with_plays(payload: dict, plays: list[dict]) -> dict:
+    payload["drives"] = {"previous": [{"plays": plays}]}
+    return payload
+
+
+_MADE_24 = _kick_play("p1", "Field Goal Good", "D.Zvada 24 yard field goal is GOOD, Center", 24)
+_MADE_52 = _kick_play("p2", "Field Goal Good", "D.Zvada 52 yard field goal is GOOD, Center", 52)
+_MISSED_43 = _kick_play(
+    "p3", "Field Goal Missed", "D.Zvada 43 yard field goal is No Good, Wide Left", 43
+)
+# ESPN reports a blocked kick's yardage as 0; its distance is only in the text.
+_BLOCKED_49 = _kick_play(
+    "p4", "Blocked Field Goal", "D.Zvada 49 yard field goal is BLOCKED (C.Granderson)", 0
+)
+
+
+def _kicks(payload: dict):
+    return ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")[2]
+
+
+def test_kicks_carry_distance_result_and_the_kicker_from_the_plays():
+    kicks = _kicks(_with_plays(_kicker_payload(), [_MADE_24, _MADE_52, _MISSED_43]))
+
+    assert [(k.play_id, k.kicker_id, k.distance, k.result) for k in kicks] == [
+        ("p1", 40, 24, "made"),
+        ("p2", 40, 52, "made"),
+        ("p3", 40, 43, "missed"),
+    ]
+
+
+def test_a_blocked_kick_takes_its_distance_from_the_text_and_counts_as_an_attempt():
+    kicks = _kicks(_with_plays(_kicker_payload(), [_MADE_24, _MADE_52, _BLOCKED_49]))
+
+    assert (kicks[2].distance, kicks[2].result) == (49, "blocked")
+
+
+def test_a_game_with_no_play_data_has_no_kicks_rather_than_an_empty_list():
+    assert _kicks(_kicker_payload()) is None
+
+
+def test_kicks_that_do_not_add_up_to_the_box_score_are_rejected():
+    payload = _with_plays(_kicker_payload(), [_MADE_24, _MADE_52])  # box score says 2/3
+
+    with pytest.raises(IngestionError, match="do not match the box score"):
+        _kicks(payload)
+
+
+def _second_kicker() -> dict:
+    return {
+        **_zvada(),
+        "id": "41",
+        "firstName": "Harrison",
+        "lastName": "Mevis",
+        "displayName": "Harrison Mevis",
+    }
+
+
+def test_two_kickers_on_a_team_are_told_apart_by_the_name_in_the_play_text():
+    payload = _kicker_payload()
+    kicking = payload["boxscore"]["players"][0]["statistics"][0]
+    kicking["athletes"][0]["stats"] = ["2/2", "100.0", "52", "2/2", "8"]
+    kicking["athletes"].append(
+        {"athlete": _second_kicker(), "stats": ["0/1", "0.0", "0", "1/1", "1"]}
+    )
+    mevis_miss = _kick_play(
+        "p5", "Field Goal Missed", "H.Mevis 43 yard field goal is No Good, Wide Left", 43
+    )
+
+    kicks = _kicks(_with_plays(payload, [_MADE_24, _MADE_52, mevis_miss]))
+
+    assert {(k.play_id, k.kicker_id) for k in kicks} == {("p1", 40), ("p2", 40), ("p5", 41)}
+
+
+def test_a_kick_that_cannot_be_attributed_is_rejected():
+    payload = _kicker_payload()
+    kicking = payload["boxscore"]["players"][0]["statistics"][0]
+    kicking["athletes"].append(
+        {"athlete": _second_kicker(), "stats": ["0/0", "0.0", "0", "0/0", "0"]}
+    )
+    stranger = _kick_play("p9", "Field Goal Good", "J.Nobody 30 yard field goal is GOOD", 30)
+
+    with pytest.raises(IngestionError, match="Cannot attribute"):
+        _kicks(_with_plays(payload, [_MADE_24, _MADE_52, stranger]))
+
+
+def _stored_kicks(db):
+    return sorted(
+        (k.external_play_id, k.distance, k.result)
+        for k in db.scalars(select(FieldGoalKick).join(Player).where(Player.external_id == "40"))
+    )
+
+
+def _ingest_plays(db, payload):
+    game, stats, kicks = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+    ingest_game(db, game, stats, kicks)
+
+
+def test_ingest_game_mirrors_kicks_upserting_and_dropping_stale_ones(db):
+    _ingest_plays(db, _with_plays(_kicker_payload(), [_MADE_24, _MADE_52, _MISSED_43]))
+    assert _stored_kicks(db) == [("p1", 24, "made"), ("p2", 52, "made"), ("p3", 43, "missed")]
+
+    # A re-run is idempotent, and a correction updates the row and removes a kick ESPN dropped.
+    corrected = _kicker_payload()
+    corrected["boxscore"]["players"][0]["statistics"][0]["athletes"][0]["stats"] = [
+        "2/2", "100.0", "52", "3/3", "9"
+    ]
+    _ingest_plays(db, _with_plays(corrected, [{**_MADE_24, "statYardage": 25}, _MADE_52]))
+    assert _stored_kicks(db) == [("p1", 25, "made"), ("p2", 52, "made")]
+
+
+def test_ingest_game_leaves_stored_kicks_alone_when_the_payload_has_no_play_data(db):
+    _ingest_plays(db, _with_plays(_kicker_payload(), [_MADE_24, _MADE_52, _MISSED_43]))
+
+    _ingest_plays(db, _kicker_payload())  # a summary without drives must not wipe the kicks
+
+    assert len(_stored_kicks(db)) == 3
