@@ -27,10 +27,13 @@ class DefenseGameStatsEntry(BaseModel):
     """One game's defense line. `stats` is a flat dict of stat name -> value (sacks,
     interceptions, points_allowed, ...); `fantasy_points` is under the request's scoring.
 
-    `opponent`, the scores and `result` are from the defense's side."""
+    `opponent`, the scores and `result` are from the defense's side. `status` is the game's: a
+    line from a game that is "in_progress" is its running total so far, and `result` stays None
+    until the game is "final"."""
 
     game_id: int
     game_date: UTCDatetime
+    status: str  # "scheduled" | "in_progress" | "final"
     week: int | None = None
     stats: dict[str, int]
     fantasy_points: float

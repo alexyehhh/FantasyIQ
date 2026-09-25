@@ -126,6 +126,7 @@ def get_player_stats(
         PlayerGameStatsEntry(
             game_id=row.game.id,
             game_date=row.game.start_time,
+            status=row.game.status,
             week=row.game.week,
             stats=players_service.serialize_stats_row(row.stats_row),
             fantasy_points=players_service.game_fantasy_points(config, row),

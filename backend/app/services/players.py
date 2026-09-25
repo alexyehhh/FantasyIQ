@@ -199,7 +199,8 @@ class Matchup:
 
     @property
     def result(self) -> str | None:
-        if self.team_score is None or self.opponent_score is None:
+        """W/L/T once the game is over; a game in progress has a score but no result yet."""
+        if self.game.status != "final" or self.team_score is None or self.opponent_score is None:
             return None
         if self.team_score == self.opponent_score:
             return "T"

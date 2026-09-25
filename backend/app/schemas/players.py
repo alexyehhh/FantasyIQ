@@ -101,11 +101,15 @@ class PlayerGameStatsEntry(BaseModel):
     current team and are None when the game can't be tied to it (e.g. a
     game played for a previous team, or one without a final score).
 
+    `status` is the game's: a line from a game that is "in_progress" is its running total so far,
+    and `result` stays None until the game is "final".
+
     `fantasy_points` is the game's score under the request's scoring config. `kicks` lists an
     NFL kicker's field goal attempts, in order, and is empty for everyone else."""
 
     game_id: int
     game_date: UTCDatetime
+    status: str  # "scheduled" | "in_progress" | "final"
     week: int | None = None
     stats: dict[str, int | float]
     fantasy_points: float

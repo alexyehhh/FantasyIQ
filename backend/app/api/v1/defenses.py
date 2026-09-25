@@ -93,6 +93,7 @@ def get_defense_stats(
         DefenseGameStatsEntry(
             game_id=row.game.id,
             game_date=row.game.start_time,
+            status=row.game.status,
             week=row.game.week,
             stats=defenses_service.serialize_defense_row(row.stats_row),
             fantasy_points=defenses_service.defense_game_fantasy_points(config, row),
