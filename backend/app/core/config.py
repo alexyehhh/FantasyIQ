@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # NFL ingestion via ESPN's public site API
     nfl_api_timeout_seconds: float = 30.0
 
+    # ESPN's public API publishes no rate limit, so requests are spaced at least this far apart
+    # (process-wide) and paused entirely when ESPN answers 429/503 (data_pipeline/espn.py).
+    espn_min_request_interval_seconds: float = 0.25
+
     @property
     def database_url(self) -> str:
         return (
