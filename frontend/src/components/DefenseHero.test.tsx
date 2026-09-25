@@ -33,40 +33,17 @@ describe("DefenseHero", () => {
     expect(screen.getByLabelText("Next game")).toHaveTextContent("@ Pittsburgh Steelers");
   });
 
-  it("averages the last ten games for fantasy points and the four defense stats", () => {
-    const entries = [
-      makeDefenseEntry({ game_id: 2, fantasy_points: 20, stats: { ...makeDefenseEntry().stats, sacks: 6 } }),
-      makeDefenseEntry({ game_id: 1, fantasy_points: 12, stats: { ...makeDefenseEntry().stats, sacks: 2 } }),
-    ];
-    render(<DefenseHero defense={makeDefenseDetail()} entries={entries} />);
+  it("shows dashes rather than last-10 averages without a season summary", () => {
+    render(<DefenseHero defense={makeDefenseDetail()} entries={[]} />);
 
     const fpts = screen.getByRole("group", { name: "Fantasy pts" });
-    expect(within(fpts).getByText("16")).toBeInTheDocument();
-    const sacks = screen.getByRole("group", { name: "Sacks" });
-    expect(within(sacks).getByText("4")).toBeInTheDocument();
-    for (const name of ["Interceptions", "Points allowed", "Yards allowed"]) {
+    expect(fpts).toHaveTextContent("Season");
+    expect(fpts).toHaveTextContent("—");
+    expect(fpts).toHaveTextContent("No games yet");
+    expect(screen.queryByText(/L10|L5 vs all/)).not.toBeInTheDocument();
+    for (const name of ["Sacks", "Interceptions", "Points allowed", "Yards allowed"]) {
       expect(screen.getByRole("group", { name })).toBeInTheDocument();
     }
-  });
-
-  it("counts a rise in points allowed as bad news, and a rise in sacks as good", () => {
-    // Most recent first: five recent games are worse on points allowed and better on sacks.
-    const games = [1, 2, 3, 4, 5, 6].map((id) =>
-      makeDefenseEntry({
-        game_id: id,
-        stats: {
-          ...makeDefenseEntry().stats,
-          points_allowed: id <= 5 ? 30 : 10,
-          sacks: id <= 5 ? 5 : 1,
-        },
-      }),
-    );
-    render(<DefenseHero defense={makeDefenseDetail()} entries={games} />);
-
-    const badge = (name: string) =>
-      within(screen.getByRole("group", { name })).getByText(/▲|▼/);
-    expect(badge("Points allowed")).toHaveClass("text-bad");
-    expect(badge("Sacks")).toHaveClass("text-good");
   });
 
   it("shows season totals with the rank among the defenses, fewest allowed first", () => {

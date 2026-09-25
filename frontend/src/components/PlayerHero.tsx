@@ -11,10 +11,8 @@ import { displayPosition } from "@/lib/positions";
 import {
   FPTS,
   STAT_LABELS,
-  average,
   formatStat,
   profileFor,
-  statValue,
 } from "@/lib/stats";
 import PlayerAvatar from "./PlayerAvatar";
 import StatusPill from "./StatusPill";
@@ -24,7 +22,7 @@ interface PlayerHeroProps {
   player: PlayerDetail;
   /** Most recent game first, as the API returns them. */
   entries: PlayerGameStatsEntry[];
-  /** Season totals with ranks; without it the tiles show last-10 averages instead. */
+  /** Season totals with ranks; without it the tiles show dashes. */
   season?: SeasonSummary | null;
 }
 
@@ -86,7 +84,6 @@ export default function PlayerHero({ player, entries, season = null }: PlayerHer
           sport={player.sport}
           entries={entries}
           tiles={[FPTS, ...profile.tiles]}
-          negativeStats={profile.negativeStats}
           season={season}
         />
       )}
@@ -134,14 +131,12 @@ export function Tiles({
   sport,
   entries,
   tiles,
-  negativeStats,
   season = null,
 }: {
   sport: Sport;
   entries: PlayerGameStatsEntry[];
   tiles: string[];
-  negativeStats: ReadonlySet<string>;
-  /** When given, each tile shows the season total and its rank instead of the last-10 average. */
+  /** When given, each tile shows the season total and its rank (dashes until there is one). */
   season?: SeasonSummary | null;
 }) {
   const total = entries.length;
@@ -149,11 +144,6 @@ export function Tiles({
   return (
     <div className="grid grid-cols-2 lg:grid-cols-[1.25fr_repeat(4,1fr)]">
       {tiles.map((key, index) => {
-        const values = entries.map((entry) => statValue(entry, key));
-        const last10 = average(values.slice(0, 10));
-        const change = average(values.slice(0, 5)) - average(values);
-        const goodChange = negativeStats.has(key) ? change < 0 : change > 0;
-        const flat = Math.abs(change) < 0.05;
         const label = STAT_LABELS[key];
         const first = index === 0;
         const ranked = season?.stats[key === FPTS ? "fantasy_points" : key] ?? null;
@@ -172,7 +162,7 @@ export function Tiles({
             <div className="text-[11.5px] font-bold uppercase tracking-[0.08em] text-ink-2">
               {key === FPTS || sport === "NFL" ? label.name : label.abbr}{" "}
               <span className="font-semibold normal-case tracking-normal text-ink-3">
-                {ranked ? "· Season" : "· L10 avg"}
+                · Season
               </span>
             </div>
             <div
@@ -180,28 +170,13 @@ export function Tiles({
                 first ? "text-[52px] text-accent" : "text-[44px]"
               }`}
             >
-              {ranked ? formatStat(ranked.total) : total === 0 ? "—" : formatStat(last10)}
+              {ranked ? formatStat(ranked.total) : "—"}
             </div>
             <div className="mt-0.5 flex items-center gap-2 text-xs text-ink-3">
               {ranked && season ? (
                 <RankLine ranked={ranked} season={season} />
-              ) : total < 2 ? (
-                <span>{total === 0 ? "No games yet" : "1 game played"}</span>
               ) : (
-                <>
-                  <span
-                    className={`rounded-full px-[7px] py-px text-xs font-bold ${
-                      flat
-                        ? "bg-surface-2 text-ink-2"
-                        : goodChange
-                          ? "bg-good-soft text-good"
-                          : "bg-bad-soft text-bad"
-                    }`}
-                  >
-                    {flat ? "—" : `${change > 0 ? "▲" : "▼"} ${formatStat(Math.abs(change))}`}
-                  </span>
-                  <span>L5 vs all {total}</span>
-                </>
+                <span>{total === 0 ? "No games yet" : "Not ranked"}</span>
               )}
             </div>
           </div>

@@ -7,11 +7,11 @@ interface DefenseHeroProps {
   defense: DefenseDetail;
   /** Most recent game first, as the API returns them. */
   entries: DefenseGameStatsEntry[];
-  /** Season totals with ranks among the defenses; without it the tiles show last-10 averages. */
+  /** Season totals with ranks among the defenses; without it the tiles show dashes. */
   season?: SeasonSummary | null;
 }
 
-/** The top of a defense page: the team, its bye week and next game, and last-10 stat tiles. */
+/** The top of a defense page: the team, its bye week and next game, and season stat tiles. */
 export default function DefenseHero({ defense, entries, season = null }: DefenseHeroProps) {
   const profile = profileFor("NFL", "DEF");
   const details = [
@@ -58,7 +58,6 @@ export default function DefenseHero({ defense, entries, season = null }: Defense
         sport="NFL"
         entries={entries}
         tiles={[FPTS, ...profile.tiles]}
-        negativeStats={profile.negativeStats}
         season={season}
       />
     </section>

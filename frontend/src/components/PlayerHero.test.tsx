@@ -123,31 +123,23 @@ describe("PlayerHero", () => {
     expect(screen.getAllByText("No games yet")).toHaveLength(5);
   });
 
-  it("shows last-10 averages, with fantasy points first", () => {
-    // 12 games scoring 32 down to 21 (newest first): the last 10 are 32..23, averaging 27.5.
-    render(<PlayerHero player={makePlayerDetail()} entries={makeNbaGames(12)} />);
+  it("shows an NBA player's season totals and rank among guards, with fantasy points first", () => {
+    const season = makeSeasonSummary({
+      position_group: "G",
+      pool_size: 180,
+      stats: {
+        fantasy_points: { total: 1200.5, rank: 4, tied: false },
+        points: { total: 1800, rank: 2, tied: false },
+      },
+    });
+    render(<PlayerHero player={makePlayerDetail()} entries={makeNbaGames(12)} season={season} />);
 
     const tiles = screen.getByLabelText("Player summary");
     expect(tiles).toHaveTextContent("Fantasy pts");
-    expect(tiles).toHaveTextContent("PTS · L10 avg27.5");
-    expect(tiles).toHaveTextContent("L5 vs all 12");
-  });
-
-  it("colors a rise in passing yards good but a rise in interceptions bad", () => {
-    // The five newest games are much better through the air, and much sloppier, than the older three.
-    const entries = Array.from({ length: 8 }, (_, index) =>
-      makeEntry({
-        game_id: 8 - index,
-        game_date: new Date(Date.UTC(2026, 0, 20 - index, 18)).toISOString(),
-        stats: index < 5 ? { passing_yards: 300, interceptions: 2 } : { passing_yards: 150, interceptions: 0 },
-      }),
-    );
-    const player = makePlayerDetail({ sport: "NFL", position: "QB" });
-    render(<PlayerHero player={player} entries={entries} />);
-
-    const tile = (name: string) => within(screen.getByRole("group", { name }));
-    expect(tile("Passing yards").getByText(/▲/)).toHaveClass("text-good");
-    expect(tile("Interceptions").getByText(/▲/)).toHaveClass("text-bad");
+    expect(tiles).toHaveTextContent("PTS · Season1800");
+    expect(within(screen.getByRole("group", { name: "Points" })).getByText("#2")).toBeInTheDocument();
+    expect(tiles).toHaveTextContent("of 180 G");
+    expect(tiles).not.toHaveTextContent("L10");
   });
 
   it("uses the full stat name on NFL tiles", () => {
@@ -208,21 +200,25 @@ describe("PlayerHero", () => {
       expect(tile("Field goals made")).toHaveTextContent("of 32 K");
     });
 
-    it("falls back to the last-10 average and trend without a season summary", () => {
-      render(<PlayerHero player={makePlayerDetail()} entries={makeNbaGames(12)} season={null} />);
+    it("shows dashes, not last-10 averages, without a season summary", () => {
+      render(<PlayerHero player={makePlayerDetail()} entries={[]} season={null} />);
 
-      expect(screen.getByRole("group", { name: "Fantasy pts" })).toHaveTextContent("L10 avg");
-      expect(screen.getAllByText(/L5 vs all 12/).length).toBeGreaterThan(0);
+      expect(screen.getByRole("group", { name: "Fantasy pts" })).toHaveTextContent("Season");
+      expect(screen.getByLabelText("Player summary")).not.toHaveTextContent("L10");
+      expect(screen.queryByText(/L5 vs all/)).not.toBeInTheDocument();
+      expect(screen.getAllByText("No games yet")).toHaveLength(5);
     });
 
-    it("falls back for a tile the summary has no rank for", () => {
+    it("shows a dash for a tile the summary has no rank for", () => {
       const partial = makeSeasonSummary({
         stats: { fantasy_points: { total: 10, rank: 4, tied: false } },
       });
       render(<PlayerHero player={qb()} entries={[makeEntry()]} season={partial} />);
 
-      expect(tile("Fantasy pts")).toHaveTextContent("Season");
-      expect(tile("Passing yards")).toHaveTextContent("L10 avg");
+      expect(tile("Fantasy pts")).toHaveTextContent("10");
+      expect(tile("Passing yards")).toHaveTextContent("—");
+      expect(tile("Passing yards")).toHaveTextContent("Not ranked");
+      expect(tile("Passing yards")).not.toHaveTextContent("L10");
     });
   });
 });

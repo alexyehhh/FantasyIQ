@@ -231,7 +231,8 @@ fantasy points and injury status and link to `/players/{id}`. A player page show
   position's key stats (fantasy points first), each with its rank among players
   at the same position ("#3 of 43 QB", "T-#5" when tied, and a green rank for the
   top five). Last-10 averages and the last-5-vs-all trend stay in the averages
-  table and chart, and are what the tiles show if the season summary can't load;
+  table and chart; before a player's first game of the season (the NBA offseason) the
+  tiles show dashes rather than last-10 averages;
 - the player's injury note, when there is one;
 - a bar chart (Recharts) of one stat over the last 5, 10 or all games with an
   average line, switchable between the position's key stats and fantasy points;

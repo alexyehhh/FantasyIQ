@@ -217,14 +217,16 @@ describe("PlayerDetailPage", () => {
     expect(tile).toHaveTextContent("of 32 QB");
   });
 
-  it("falls back to last-10 averages when there is no season summary", async () => {
+  it("shows dashes rather than last-10 averages when there is no season summary", async () => {
     mockedGetPlayer.mockResolvedValue(makePlayerDetail());
     mockedGetPlayerStats.mockResolvedValue([makeEntry()]);
     mockedGetPlayerSeason.mockResolvedValue(null);
 
     await renderPage();
 
-    expect(screen.getByRole("group", { name: "Fantasy pts" })).toHaveTextContent("L10 avg");
+    const tile = screen.getByRole("group", { name: "Fantasy pts" });
+    expect(tile).toHaveTextContent("Season");
+    expect(tile).not.toHaveTextContent("L10");
   });
 
   it("still renders the page when the scoring can't be fetched", async () => {
