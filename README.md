@@ -30,6 +30,7 @@ docker-compose up --build
 - Frontend: http://localhost:3000 (shows backend status)
 - Postgres: localhost:5432
 - Redis: localhost:6379 (not yet used by the app)
+- Worker: no port; it keeps games, injuries, rosters and the schedule current (see "Keeping the data current")
 
 ### Database migrations
 
@@ -108,8 +109,9 @@ and the same `--payload-stdin` fallback and idempotent-upsert behavior apply.
 Game ingestion loads box scores; this job keeps the reference data current —
 every team's logo and colors, every rostered player's team, number, position,
 headshot and bio, the current injury report, and the regular-season schedule
-(with final scores for games already played). It is idempotent, so run it
-whenever you want fresh rosters and injuries (daily is plenty):
+(with final scores for games already played). The worker runs it every 6 hours
+(see "Keeping the data current"); it is idempotent, so you can also run it by hand
+whenever you want fresh rosters and injuries right now:
 
 ```bash
 docker-compose exec backend python -m data_pipeline.espn_directory --sport all
@@ -133,8 +135,8 @@ specific. A game log's opponent and result are worked out from the player's
 
 The directory sync records every game and marks it final once it's played; this job
 loads the box score for each finished game that doesn't have one yet, so you don't
-have to look up ESPN event IDs. Run it after the directory sync (weekly is plenty in
-the NFL season):
+have to look up ESPN event IDs. The worker does this automatically, so by hand it is
+only needed for `--reingest` or a big backlog:
 
 ```bash
 docker-compose exec backend python -m data_pipeline.backfill --sport all
@@ -146,6 +148,47 @@ have stats too, which is how a newly added stat column gets filled in for old ga
 (default 0.5 seconds). A game that fails (ESPN error, or a payload that doesn't reconcile
 with its box score) is listed and skipped, the rest still run, and the exit code is 1 if
 anything failed. Every ingest upserts, so re-running is always safe.
+
+### Keeping the data current (the worker)
+
+Everything above can be run by hand, but you don't have to: `docker-compose up` also starts a
+`worker` service (`python -m data_pipeline.worker`) that keeps the data fresh on its own. It is
+the only thing that calls ESPN. The API only reads the database, so the number of people using the
+app changes neither how hard ESPN is hit nor how fast a page loads. Reloading a page shows what the
+worker has stored, at most a few seconds behind.
+
+| job | runs | does |
+| --- | --- | --- |
+| `live` | every 15 s | pulls stats for games in progress, games that should have started, and finished games with no final box score; each game at most every 30 s |
+| `injuries` | every 15 min | the injury report (2 requests) |
+| `directory` | every 6 h | teams, rosters, schedule and injuries (about 130 requests, 35 s) |
+| `backfill` | every hour | box scores of finished games too old for the live job (up to 20 per sport per run) |
+
+A game counts for the live job when it is in progress; past its start time but still `scheduled`
+(within 48 hours); or `final` without a box score taken after it ended (`games.stats_final`,
+within 14 days). Intervals are settings: `WORKER_LIVE_INTERVAL_SECONDS`,
+`WORKER_INJURIES_INTERVAL_SECONDS`, `WORKER_DIRECTORY_INTERVAL_SECONDS`,
+`WORKER_BACKFILL_INTERVAL_SECONDS`, plus `LIVE_REFRESH_COOLDOWN_SECONDS` (30) and
+`LIVE_REFRESH_TIMEOUT_SECONDS` (8). The code is `data_pipeline/worker.py` and
+`data_pipeline/refresh.py`. In development it restarts itself when backend code changes.
+
+**Rate limits.** ESPN publishes none for this API, so the client is deliberately gentle. Every
+request goes through one gate that spaces them at least 0.25 s apart (`ESPN_MIN_REQUEST_INTERVAL_SECONDS`),
+so never more than 4 a second. If ESPN answers 429 or 503 the worker stops asking altogether
+(honouring `Retry-After`, else 60 s, doubling each time to 15 minutes) and carries on afterwards. In
+practice a quiet hour is about 30 requests, and a busy NFL Sunday about one request per live game
+every 30 s.
+
+**Staying up.** A job that fails is logged, recorded in the `job_runs` table and retried after 1, 2,
+4 ... up to 15 minutes; it can't stop the worker or the other jobs, and one bad game never costs the
+others. Last-run times are stored in the database, so a restart or a crash loop doesn't rerun
+everything and hit ESPN again. `GET /api/v1/health/jobs` shows when each job last succeeded, its
+failures and last error, and `status: "degraded"` when one is overdue. You can run several workers
+(for redundancy): they elect one leader with a Postgres advisory lock, the rest wait, and one takes
+over within about 15 seconds if the leader dies.
+
+While a game is on, its kicks and team-defense lines are only stored when they reconcile with the
+box score (a finished game that doesn't is still rejected, as above); the player lines always are.
 
 ### Player API
 
@@ -169,7 +212,9 @@ Each player includes `team` (name, abbreviation, logo, color), `headshot_url`
 and `injury_status`; the detail response adds height, weight, birth date,
 college, experience, the full `injury` report, and `next_game` (opponent, home
 or away, start time). Each stat line includes `opponent`, `is_home`, both
-scores, `week` (NFL) and `result` (`W`/`L`/`T`). `/schedule` returns the player's
+scores, `status` (`scheduled`, `in_progress` or `final`), `week` (NFL) and `result` (`W`/`L`/`T`,
+only once the game is `final`; a game in progress has its running score and no result). A line
+from a game in progress is its stats so far. `/schedule` returns the player's
 team's games for the current season, played and upcoming, in date order (NFL stops
 at week 17); a team's `bye_week` is on its `team` object. Timestamps are ISO 8601
 in UTC.
@@ -236,9 +281,12 @@ fantasy points and injury status and link to `/players/{id}`. A player page show
 - the player's injury note, when there is one;
 - a bar chart (Recharts) of one stat over the last 5, 10 or all games with an
   average line, switchable between the position's key stats and fantasy points;
-- an averages table and a consistency plot (floor / median / average / ceiling);
+- an averages table and a consistency plot (floor / median / average / ceiling). The chart,
+  averages and consistency plot use finished games only, since a game in progress would drag
+  them down; the header's season totals and ranks do include it, as its running total;
 - a game log for the current season, from its first game: results with the
-  player's stats, then upcoming games with kickoff times. A football season is shown
+  player's stats, a game in progress marked Live with its running score and the stats so far,
+  then upcoming games with kickoff times. A football season is shown
   whole, bye week included (through week 17). A basketball season is far longer,
   so the log shows one page of 20 games at a time, counted from game 1, with
   Previous and Next buttons that replace the page. It opens on the first page that
