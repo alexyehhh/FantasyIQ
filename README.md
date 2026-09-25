@@ -322,6 +322,29 @@ the projected points allowed (assumed spread `POINTS_ALLOWED_SD` = 9.5 points), 
 up the average, and a kicker's Sleeper distance ranges are treated as evenly spread
 (`approximate` is set if a bracket boundary falls inside one).
 
+### Who should I start? (frontend)
+
+`/start` (nav: Start / Sit) is a FantasyPros-style start/sit page. Search for players (or team
+defenses) or click rows in the Top players list to fill up to five slots, then press View
+advice for a verdict ("Start Jahmyr Gibbs", with a Clear edge / Lean / Toss-up label from the
+odds that the last starter outscores the first sitter), a floor-to-ceiling plot on one axis, and
+a card per player with the reasons (injury, points ahead or behind, boom-or-bust, stats the
+source doesn't project). A player whose game has started or finished stays in Top players
+(marked Final or Live) and can be compared, but is highlighted "Game over: can't be started", is
+never recommended and takes no part in the verdict or the odds. "Starting
+spots" marks the top N as starters when you're choosing more than one. Top players is ranked
+per lineup slot (QB, RB, WR, TE, FLEX, Superflex, K, DST; the NBA has G, F, C, Util), 30 to a
+page with Previous and Next buttons. The week
+stepper (NFL) moves the whole page to another week. The scoring dropdown offers FantasyIQ
+(PPR), Half-PPR, Standard and Custom. The weights under the gear follow the choice (Half-PPR
+shows 0.5 per reception), and editing one, or picking Custom, continues from there; kicker and
+defense scoring always stay as in the default. The source is shown as a label (Sleeper) until
+there is more than one to choose from. My team is a starred list, kept in this browser
+(localStorage) until leagues can be linked. The comparison lives in the address (`?slot=WR&week=5&scoring=half&picks=p1384,d67&advice=1`,
+defaults left out), so a refresh or a shared link shows the same thing, and opening `/start` with
+no address returns to the last one from this browser. All the numbers come from the projections API
+above; the page only ranks and explains them (`src/lib/startSit.ts`).
+
 ### Frontend player pages
 
 With the backend running and the directory synced, `/players` is a search page

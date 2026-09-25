@@ -5,6 +5,7 @@ import type {
   PlayerListItem,
   PlayerGameStatsEntry,
   PlayerSummary,
+  ProjectionEntry,
   ScheduleEntry,
   ScoringConfig,
   SeasonSummary,
@@ -217,6 +218,42 @@ export function makeSeasonSummary(overrides: Partial<SeasonSummary> = {}): Seaso
       interceptions: { total: 1, rank: 12, tied: false },
       rushing_yards: { total: 40, rank: 7, tied: false },
     },
+    ...overrides,
+  };
+}
+
+export function makeProjectionEntry(
+  overrides: Partial<ProjectionEntry> = {},
+): ProjectionEntry {
+  return {
+    kind: "player",
+    id: 1,
+    name: "Jahmyr Gibbs",
+    position: "RB",
+    team: makeTeam({ id: 8, name: "Detroit Lions", abbreviation: "DET" }),
+    headshot_url: null,
+    source: "sleeper",
+    status: "ok",
+    fantasy_points: 20,
+    low: 12,
+    high: 28,
+    std: 8,
+    spread_basis: "position",
+    chance_best: null,
+    game: {
+      game_id: 11,
+      start_time: "2026-09-27T17:00:00Z",
+      status: "scheduled",
+      week: 3,
+      is_home: true,
+      opponent: makeTeam({ id: 9, name: "New York Jets", abbreviation: "NYJ" }),
+    },
+    stats: {},
+    games_sampled: 2,
+    injury_status: null,
+    approximate: false,
+    unprojected_stats: [],
+    notes: [],
     ...overrides,
   };
 }

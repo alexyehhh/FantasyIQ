@@ -23,6 +23,12 @@ export default function NavBar() {
           >
             Players
           </Link>
+          <Link
+            href="/start"
+            className="-mb-px flex items-center border-b-[3px] border-transparent px-3.5 text-sm font-semibold text-[#b9b0da] hover:text-white"
+          >
+            Start / Sit
+          </Link>
         </nav>
       </div>
     </header>

@@ -406,3 +406,125 @@ export function getPlayerSeason(id: number): Promise<SeasonSummary | null> {
 export function getDefenseSeason(id: number): Promise<SeasonSummary | null> {
   return fetchSeason(`/api/v1/defenses/${id}/season`);
 }
+
+/** A place a projection can come from (GET /projections/sources). */
+export interface ProjectionSource {
+  name: string;
+  label: string;
+  description: string;
+  sports: Sport[];
+}
+
+/** The game a projection is for. */
+export interface ProjectedGame {
+  game_id: number;
+  start_time: string;
+  status: "scheduled" | "in_progress" | "final";
+  week: number | null;
+  is_home: boolean;
+  opponent: TeamSummary;
+}
+
+/** ok: has points; out: ruled out (0); no_game: bye week or nothing scheduled; unavailable: no data. */
+export type ProjectionStatus = "ok" | "out" | "no_game" | "unavailable";
+
+/**
+ * One player's or team defense's projection for a game, in the scoring the request asked for.
+ * `low`/`high` are one standard deviation (`std`) either side of `fantasy_points`; `chance_best`
+ * (0-1) is the chance of scoring the most among the players compared, null for a single one.
+ */
+export interface ProjectionEntry {
+  kind: "player" | "defense";
+  id: number;
+  name: string;
+  position: string | null;
+  team: TeamSummary | null;
+  headshot_url: string | null;
+  source: string;
+  status: ProjectionStatus;
+  fantasy_points: number | null;
+  low: number | null;
+  high: number | null;
+  std: number | null;
+  spread_basis: "history" | "blended" | "position" | null;
+  chance_best: number | null;
+  game: ProjectedGame | null;
+  stats: Record<string, number>;
+  /** Past games the floor and ceiling rest on (the projection itself never uses them). */
+  games_sampled: number | null;
+  injury_status: string | null;
+  approximate: boolean;
+  unprojected_stats: string[];
+  notes: string[];
+}
+
+/**
+ * Projections best first, for `week` (NFL; null for the NBA). For a top list `items` is one page
+ * and `total` how many players there are to page through; `total` is null otherwise.
+ */
+export interface ProjectionResponse {
+  source: string;
+  scoring: string;
+  week: number | null;
+  items: ProjectionEntry[];
+  total: number | null;
+}
+
+interface ProjectionQuery {
+  sport: Sport;
+  source: string;
+  /** Omit for the sport's default scoring. */
+  scoring?: ScoringConfig | null;
+  /** NFL week; omit for each team's next game. */
+  week?: number | null;
+}
+
+function projectionParams({ sport, source, scoring, week }: ProjectionQuery): URLSearchParams {
+  const query = new URLSearchParams({ sport, source });
+  if (scoring) query.set("scoring", JSON.stringify(scoring));
+  if (week != null) query.set("week", String(week));
+  return query;
+}
+
+async function fetchJson<T>(path: string, what: string): Promise<T> {
+  const res = await fetch(`${apiUrl()}${path}`, { cache: "no-store" });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.json();
+      if (typeof body.detail === "string") detail = `: ${body.detail}`;
+    } catch {
+      // not JSON; the status says enough
+    }
+    throw new Error(`Failed to ${what} (${res.status})${detail}`);
+  }
+  return res.json();
+}
+
+export function getProjectionSources(): Promise<ProjectionSource[]> {
+  return fetchJson("/api/v1/projections/sources", "list projection sources");
+}
+
+/** Projections for the given players and/or defenses (NFL team ids), best first. */
+export function getProjections(
+  query: ProjectionQuery & { playerIds?: number[]; defenseIds?: number[] },
+): Promise<ProjectionResponse> {
+  const params = projectionParams(query);
+  for (const id of query.playerIds ?? []) params.append("player_id", String(id));
+  for (const id of query.defenseIds ?? []) params.append("defense_id", String(id));
+  return fetchJson(`/api/v1/projections?${params}`, "project players");
+}
+
+/**
+ * A page of the best projections for a lineup slot (NFL QB/RB/WR/TE/FLEX/SUPERFLEX/K/DST, NBA
+ * G/F/C/UTIL): `limit` of them starting `offset` places down the ranking.
+ */
+export function getTopProjections(
+  query: ProjectionQuery & { slot: string; limit?: number; offset?: number },
+): Promise<ProjectionResponse> {
+  const params = projectionParams(query);
+  params.set("slot", query.slot);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.offset) params.set("offset", String(query.offset));
+  return fetchJson(`/api/v1/projections/top?${params}`, "list top players");
+}

@@ -33,6 +33,9 @@ export default async function HomePage() {
       <Link href="/players" className="font-semibold text-accent hover:underline">
         Browse players &rarr;
       </Link>
+      <Link href="/start" className="font-semibold text-accent hover:underline">
+        Who should I start? &rarr;
+      </Link>
     </main>
   );
 }
