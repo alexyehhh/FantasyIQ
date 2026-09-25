@@ -14,9 +14,10 @@ game failing (ESPN error, payload that doesn't reconcile) is reported and skippe
 never stops the rest of the run.
 
 A game counts as already loaded when it has rows in the table the current ingest job
-writes last for that sport: player lines for the NBA, team defense lines for the NFL. An
-NFL game whose summary has no play data therefore shows up as missing on every run and
-is simply fetched again.
+writes last for that sport (player lines for the NBA, team defense lines for the NFL) and
+those rows were taken after the game ended (`Game.stats_final`; a box score captured mid-game
+by the live refresh doesn't count). An NFL game whose summary has no play data therefore shows
+up as missing on every run and is simply fetched again.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Game, PlayerGameStats, TeamGameStatsNFL
@@ -51,17 +52,28 @@ class BackfillReport:
 
 
 def select_games(
-    db: Session, sport: str, *, reingest: bool = False, limit: int | None = None
+    db: Session,
+    sport: str,
+    *,
+    reingest: bool = False,
+    limit: int | None = None,
+    by_marker: bool = True,
 ) -> list[str]:
-    """ESPN ids of finished games to ingest, oldest first."""
+    """ESPN ids of finished games to ingest, oldest first.
+
+    `by_marker=False` goes by `Game.stats_final` alone, ignoring whether the sport's marker table
+    has rows. The worker uses it: a game whose summary never has the data the marker needs (an
+    NFL game with no play data) would otherwise come up on every run and crowd out newer ones."""
     stmt = (
         select(Game.external_id)
         .where(Game.sport == sport, Game.status == "final", Game.external_id.is_not(None))
         .order_by(Game.start_time, Game.id)
     )
     if not reingest:
-        marker = _LOADED_MARKER[sport]
-        stmt = stmt.where(~exists().where(marker == Game.id))
+        unfinished = Game.stats_final.is_(False)
+        if by_marker:
+            unfinished = or_(~exists().where(_LOADED_MARKER[sport] == Game.id), unfinished)
+        stmt = stmt.where(unfinished)
     if limit is not None:
         stmt = stmt.limit(limit)
     return list(db.scalars(stmt))
@@ -74,13 +86,14 @@ def backfill(
     reingest: bool = False,
     limit: int | None = None,
     delay: float = 0.5,
+    by_marker: bool = True,
     runner: Callable[[str], int] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> BackfillReport:
     """Ingest each selected game, pausing `delay` seconds between ESPN requests."""
     run_game = runner or _RUNNERS[sport]
     report = BackfillReport(sport)
-    game_ids = select_games(db, sport, reingest=reingest, limit=limit)
+    game_ids = select_games(db, sport, reingest=reingest, limit=limit, by_marker=by_marker)
     for position, game_id in enumerate(game_ids):
         if position and delay:
             sleep(delay)

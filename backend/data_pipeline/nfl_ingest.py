@@ -544,6 +544,8 @@ def ingest_game(
     record.status = game.status_state
     record.home_score = game.home_score
     record.away_score = game.visitor_score
+    # A final game whose box score hasn't been posted yet is not "loaded": try again later.
+    record.stats_final = game.status_state == "final" and bool(stats)
     db.flush()
     for stat in stats:
         player = db.scalar(select(Player).where(Player.external_id == str(stat.player.id)))

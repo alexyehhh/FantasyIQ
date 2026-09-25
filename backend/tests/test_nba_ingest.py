@@ -294,3 +294,34 @@ def test_ingest_game_stores_makes_and_free_throws_and_upserts_on_rerun(db):
     rows = db.scalars(select(PlayerGameStats).join(Player).where(Player.external_id == "70")).all()
     assert len(rows) == 1
     assert rows[0].free_throws_made == 6
+
+
+def _stats_final_after_ingesting(db, mutate=None):
+    payload = _summary_payload()
+    if mutate:
+        mutate(payload)
+    game, stats = ESPNNBAClient(summary_factory=lambda _: payload).get_game("401705000")
+    ingest_game(db, game, stats)
+    return db.scalar(select(Game).where(Game.external_id == "401705000"))
+
+
+def test_stats_are_final_only_once_a_finished_game_has_a_box_score(db):
+    assert _stats_final_after_ingesting(db).stats_final is True
+
+
+def test_stats_taken_while_a_game_is_on_are_not_final(db):
+    def live(payload):
+        payload["header"]["status"] = {"type": {"state": "in"}}
+
+    record = _stats_final_after_ingesting(db, live)
+
+    assert (record.status, record.stats_final) == ("in_progress", False)
+
+
+def test_a_finished_game_whose_box_score_is_not_posted_yet_is_not_final(db):
+    def no_box_score(payload):
+        payload["boxscore"] = {"players": []}
+
+    record = _stats_final_after_ingesting(db, no_box_score)
+
+    assert (record.status, record.stats_final) == ("final", False)

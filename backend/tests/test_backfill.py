@@ -55,9 +55,11 @@ def test_only_finished_games_without_a_box_score_are_selected_oldest_first(db):
 
 def test_a_game_that_already_has_its_stats_is_skipped_unless_reingesting(db):
     nfl = _game(db, "NFL", "nfl-loaded", days=0)
+    nfl.stats_final = True
     db.add(TeamGameStatsNFL(team_id=nfl.home_team_id, game_id=nfl.id))
     _game(db, "NFL", "nfl-missing", days=1)
     nba = _game(db, "NBA", "nba-loaded", days=0)
+    nba.stats_final = True
     player = Player(name="P", sport="NBA", team_id=nba.home_team_id)
     db.add(player)
     db.flush()
@@ -68,6 +70,28 @@ def test_a_game_that_already_has_its_stats_is_skipped_unless_reingesting(db):
     assert select_games(db, "NFL", reingest=True) == ["nfl-loaded", "nfl-missing"]
     assert select_games(db, "NBA") == []
     assert select_games(db, "NBA", reingest=True) == ["nba-loaded"]
+
+
+def test_a_box_score_taken_mid_game_does_not_count_as_loaded(db):
+    # The live refresh stored stats while the game was on; the schedule sync then marked it final.
+    game = _game(db, "NFL", "nfl-partial", days=0)
+    db.add(TeamGameStatsNFL(team_id=game.home_team_id, game_id=game.id))
+    db.flush()
+
+    assert game.stats_final is False
+    assert select_games(db, "NFL") == ["nfl-partial"]
+
+
+def test_going_by_stats_final_alone_ignores_the_marker_table(db):
+    # An NFL game whose summary never has play data has no defense rows however often it is
+    # fetched; by marker it would come up on every run, by stats_final it is done.
+    done = _game(db, "NFL", "nfl-no-plays", days=0)
+    done.stats_final = True
+    _game(db, "NFL", "nfl-unfinished", days=1)
+    db.flush()
+
+    assert select_games(db, "NFL") == ["nfl-no-plays", "nfl-unfinished"]
+    assert select_games(db, "NFL", by_marker=False) == ["nfl-unfinished"]
 
 
 def test_limit_caps_the_number_of_games(db):
