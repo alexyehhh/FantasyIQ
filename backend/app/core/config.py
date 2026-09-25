@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # Short, since one slow game shouldn't hold up the others being refreshed.
     live_refresh_timeout_seconds: float = 8.0
 
+    # Sleeper's public API (projections by Rotowire). The API server calls it on demand and keeps
+    # the answer in memory for the TTL; nothing from it is stored in the database.
+    sleeper_projections_url: str = "https://api.sleeper.com/projections"
+    sleeper_state_url: str = "https://api.sleeper.app/v1/state"
+    sleeper_timeout_seconds: float = 15.0
+    sleeper_cache_ttl_seconds: float = 900.0
+
     @property
     def database_url(self) -> str:
         return (

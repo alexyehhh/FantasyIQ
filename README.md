@@ -153,7 +153,8 @@ anything failed. Every ingest upserts, so re-running is always safe.
 
 Everything above can be run by hand, but you don't have to: `docker-compose up` also starts a
 `worker` service (`python -m data_pipeline.worker`) that keeps the data fresh on its own. It is
-the only thing that calls ESPN. The API only reads the database, so the number of people using the
+the only thing that calls ESPN. The API only reads the database (apart from the Sleeper projections
+source, see "Projections"), so the number of people using the
 app changes neither how hard ESPN is hit nor how fast a page loads. Reloading a page shows what the
 worker has stored, at most a few seconds behind.
 
@@ -258,6 +259,68 @@ scoring, and an NFL kicker's entries carry `kicks` (`distance` and `result`: `ma
 next game, `/stats` the game log (sacks, interceptions, points allowed, ... plus
 `fantasy_points`), and `/schedule` the season. The other endpoints work the same way as
 the player ones.
+
+### Projections
+
+`GET /api/v1/projections` answers "who should I start?": it projects players and/or team
+defenses for their next game and ranks them by fantasy points under the caller's scoring.
+
+```
+GET /api/v1/projections?sport=NFL&player_id=1384&player_id=1370&defense_id=67&source=sleeper&week=3
+GET /api/v1/projections/top?sport=NFL&slot=FLEX&source=sleeper&week=3&limit=30
+GET /api/v1/players/{id}/projection?source=sleeper
+GET /api/v1/defenses/{team_id}/projection
+GET /api/v1/projections/sources
+```
+
+A **source** decides the expected *stat line* (yards, receptions, field goals by distance,
+sacks, points allowed); the backend then scores that line with the request's `scoring`
+(same parameter as everywhere else), once, for every source. So each source follows the
+league's own settings, and a stat the league scores but the source doesn't project
+(`unprojected_stats`, e.g. 4th-down stops from Sleeper) counts as zero. Ones that almost never
+happen (kick return touchdowns) count as zero without being listed. Sources are classes in
+`app/services/projections/` registered in `PROVIDERS`; a new one (later, our own model) needs
+only a `project` method.
+
+- `sleeper`: Sleeper's public projections (produced by Rotowire), which know the opponent.
+  Fetched on demand by the API server and kept in memory for 15 minutes
+  (`SLEEPER_CACHE_TTL_SECONDS`); nothing from Sleeper is stored. The endpoint is undocumented,
+  so a change there is a `502`, not wrong numbers: rows are matched to our players by name and
+  team, and must agree with our schedule on the opponent, or the player is `unavailable`.
+  Sleeper leaves out players it doesn't expect to play and fringe players.
+
+`sleeper` is the only source, and the default. A player's own recent games are deliberately not
+a source: one good game says little about what they will score next week (they were removed
+after being tried), and they never move a projection. They only size its range, below.
+
+**Spread and odds.** Every entry has `std`, `low` and `high` (one standard deviation either
+side of the projection). It comes from the player's own game-to-game swings in their last games
+(`app/services/projections/history.py`), blended with a typical spread for their position (a share of the projection: QB 35%,
+RB 50%, WR/TE 55%, K 35%, D/ST 60%, NBA 30%; assumptions, not fitted) in proportion to the
+games behind it: with n games history counts n/(n+4), so it stands alone only once there are
+many. `spread_basis` says which applied and `games_sampled` how many games it rests on. When several are compared, `chance_best` is each
+one's chance of scoring the most, from 4,000 seeded draws of normally distributed scores
+around the projections, treating players as independent.
+
+`/projections/top` ranks a lineup slot (NFL `QB RB WR TE FLEX SUPERFLEX K DST`, NBA
+`G F C UTIL`) by projection, a page at a time (`limit`, default 30, and `offset`; the response's
+`total` is how many there are). The ranking covers everyone the source projects for the week
+(NFL) or the next day of games (NBA) and that we have as an active player, scored under the
+request's `scoring` and leaving out anyone listed Out, on injured reserve or Doubtful (a
+Doubtful player named in a comparison is still projected, with a warning); only the page
+returned is projected in full (game, range, flags). So a player with no games yet is ranked as
+long as the source projects them, and a team on a bye simply isn't there. Responses carry
+`week`: the NFL week in play (that of the earliest unfinished game, so it rolls over after
+Monday night), or the requested one.
+
+Each entry has a `status`: `ok`, `out` (injury status Out or Injured Reserve: 0 points),
+`no_game` (bye week, or nothing scheduled) or `unavailable` (the source has nothing; `notes`
+says why). Without `week`, each is projected for its team's next game; `week` (NFL) picks that
+week's game, so a bye shows as `no_game`. Questionable and Doubtful players are projected as
+if they play, with a note. Points-allowed brackets are scored over a spread of outcomes around
+the projected points allowed (assumed spread `POINTS_ALLOWED_SD` = 9.5 points), not by looking
+up the average, and a kicker's Sleeper distance ranges are treated as evenly spread
+(`approximate` is set if a bracket boundary falls inside one).
 
 ### Frontend player pages
 
