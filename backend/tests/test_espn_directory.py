@@ -442,9 +442,22 @@ def test_parse_schedule_reads_the_nfl_week_and_leaves_it_empty_for_the_nba():
     assert nba.week is None
 
 
-def test_parse_bye_week_reads_the_schedule_payloads_bye():
-    assert parse_bye_week({"byeWeek": 5}) == 5
-    assert parse_bye_week({}) is None  # the NBA has no bye
+def _schedule_without(*byes: int):
+    weeks = [w for w in range(1, 19) if w not in byes]
+    return parse_schedule(
+        "NFL", {"events": [_event(f"4{w:02d}", "pre", week=w, year=2026) for w in weeks]}
+    )
+
+
+def test_parse_bye_week_is_the_one_week_with_no_game():
+    assert parse_bye_week(_schedule_without(11)) == 11
+
+
+def test_parse_bye_week_is_unknown_when_the_schedule_is_not_a_full_season_with_one_bye():
+    assert parse_bye_week(_schedule_without()) is None  # every week has a game
+    assert parse_bye_week(_schedule_without(6, 11)) is None  # a game missing from the payload
+    assert parse_bye_week([]) is None
+    assert parse_bye_week(parse_schedule("NBA", {"events": [_event()]})) is None  # no NBA bye
 
 
 def test_sync_games_stores_the_week(db):
@@ -474,14 +487,17 @@ class _FakeESPN:
         return {"athletes": [_athlete(id=team_id)]}
 
     def schedule(self, sport, league, team_id, season_type=2):
-        return {"byeWeek": 4 + int(team_id), "events": [_event(f"9{team_id}", "pre", week=1,
-                                                                  year=2026)]}
+        # Team One's bye is week 5 and Team Two's week 6; the payload's own byeWeek is wrong
+        weeks = [w for w in range(1, 19) if w != 4 + int(team_id)]
+        return {"byeWeek": 1, "events": [
+            _event(f"9{team_id}{w:02d}", "pre", week=w, year=2026) for w in weeks
+        ]}
 
     def injuries(self, sport, league):
         return {"injuries": []}
 
 
-def test_sync_sport_stores_each_teams_bye_week_and_dedupes_shared_games(db):
+def test_sync_sport_derives_each_teams_bye_week_from_its_games_not_the_payloads_field(db):
     report = sync_sport(db, _FakeESPN(), "NFL")
 
     byes = {t.abbreviation: t.bye_week for t in db.scalars(select(Team).where(Team.sport == "NFL"))}

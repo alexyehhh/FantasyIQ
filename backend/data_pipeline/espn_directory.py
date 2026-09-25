@@ -278,9 +278,18 @@ def parse_schedule(sport: str, raw: dict[str, Any]) -> list[ScheduledGame]:
     return games
 
 
-def parse_bye_week(raw: dict[str, Any]) -> int | None:
-    """The team's bye week from its schedule payload (NFL only; the NBA has none)."""
-    return _clean_int(raw.get("byeWeek"))
+_NFL_REGULAR_SEASON_WEEKS = range(1, 19)
+
+
+def parse_bye_week(schedule: list[ScheduledGame]) -> int | None:
+    """The one NFL week (1-18) a team has no game, or None if that isn't clear (the NBA has no
+    byes, and a schedule missing more than one week is incomplete, not a schedule with a bye).
+
+    It is worked out from the games rather than read from the payload's own `byeWeek`, which
+    ESPN gets wrong: it said 5 for Atlanta, whose events show a game in week 5 and none in 11."""
+    played = {game.week for game in schedule}
+    missing = [week for week in _NFL_REGULAR_SEASON_WEEKS if week not in played]
+    return missing[0] if len(missing) == 1 else None
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +486,8 @@ def sync_sport(db: Session, client: ESPNClient, sport: str) -> SyncReport:
             report.failures.append(f"{team.abbreviation} roster")
         try:
             raw_schedule = client.schedule(espn_sport, espn_league, str(espn_id))
-            team.bye_week = parse_bye_week(raw_schedule)
             schedule = parse_schedule(sport, raw_schedule)
+            team.bye_week = parse_bye_week(schedule)
             fresh = [game for game in schedule if game.id not in seen_games]
             seen_games.update(game.id for game in fresh)
             report.games += sync_games(db, sport, fresh, teams, games)
