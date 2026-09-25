@@ -24,6 +24,7 @@ jest.mock("@/lib/api", () => ({
   getPlayerSchedule: jest.fn(),
   getScoringPreset: jest.fn(),
   getPlayerSeason: jest.fn(),
+  getHealth: jest.fn(),
 }));
 
 const notFound = jest.fn(() => {
@@ -31,6 +32,7 @@ const notFound = jest.fn(() => {
 });
 jest.mock("next/navigation", () => ({
   notFound: () => notFound(),
+  useRouter: () => ({ refresh: jest.fn() }),
 }));
 
 const mockedGetPlayer = getPlayer as jest.MockedFunction<typeof getPlayer>;
@@ -108,6 +110,26 @@ describe("PlayerDetailPage", () => {
 
     expect(screen.getByText("Bye week 5")).toBeInTheDocument();
     expect(screen.getByText("Week 5 · Bye")).toBeInTheDocument();
+  });
+
+  it("keeps itself up to date while the team's game is on", async () => {
+    mockedGetPlayer.mockResolvedValue(makePlayerDetail());
+    mockedGetPlayerStats.mockResolvedValue([]);
+    mockedGetPlayerSchedule.mockResolvedValue([makeScheduleEntry({ status: "in_progress" })]);
+
+    await renderPage();
+
+    expect(screen.getByRole("status")).toHaveTextContent("Live · updates automatically");
+  });
+
+  it("doesn't poll when nothing is on", async () => {
+    mockedGetPlayer.mockResolvedValue(makePlayerDetail());
+    mockedGetPlayerStats.mockResolvedValue([makeEntry()]);
+    mockedGetPlayerSchedule.mockResolvedValue([...scheduleFromGames([makeEntry()]), ...makeUpcoming(3)]);
+
+    await renderPage();
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("links back to the players list", async () => {

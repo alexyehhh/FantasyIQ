@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import DefenseDetailPage from "./page";
 import {
   getDefense,
@@ -10,6 +10,7 @@ import {
 import {
   makeDefenseDetail,
   makeDefenseEntry,
+  makeScheduleEntry,
   makeScoringConfig,
   makeSeasonSummary,
   makeUpcoming,
@@ -22,6 +23,7 @@ jest.mock("@/lib/api", () => ({
   getDefenseSchedule: jest.fn(),
   getScoringPreset: jest.fn(),
   getDefenseSeason: jest.fn(),
+  getHealth: jest.fn(),
 }));
 
 const notFound = jest.fn(() => {
@@ -29,6 +31,7 @@ const notFound = jest.fn(() => {
 });
 jest.mock("next/navigation", () => ({
   notFound: () => notFound(),
+  useRouter: () => ({ refresh: jest.fn() }),
 }));
 
 const mockedGetDefense = getDefense as jest.MockedFunction<typeof getDefense>;
@@ -63,6 +66,17 @@ describe("DefenseDetailPage", () => {
     expect(screen.getByLabelText("Game trend")).toBeInTheDocument();
     expect(screen.getByLabelText("Averages")).toBeInTheDocument();
     expect(screen.getByLabelText("Game log")).toBeInTheDocument();
+  });
+
+  it("keeps itself up to date while the team's game is on, and not otherwise", async () => {
+    mockedGetSchedule.mockResolvedValue([makeScheduleEntry({ status: "in_progress" })]);
+    await renderPage();
+    expect(screen.getByRole("status")).toHaveTextContent("Live · updates automatically");
+
+    cleanup();
+    mockedGetSchedule.mockResolvedValue(makeUpcoming(2));
+    await renderPage();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("asks for a whole season of games, the schedule, and the NFL scoring", async () => {
