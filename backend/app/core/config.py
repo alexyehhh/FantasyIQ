@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # (process-wide) and paused entirely when ESPN answers 429/503 (data_pipeline/espn.py).
     espn_min_request_interval_seconds: float = 0.25
 
+    # A game in progress is refreshed at most once per cooldown (data_pipeline/refresh.py). The
+    # timeout is short since one slow game shouldn't hold up the others being refreshed.
+    live_refresh_cooldown_seconds: float = 30.0
+    live_refresh_timeout_seconds: float = 8.0
+
     @property
     def database_url(self) -> str:
         return (
