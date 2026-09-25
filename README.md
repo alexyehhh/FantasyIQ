@@ -395,15 +395,14 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Note: the database tests hit a real Postgres (not sqlite/mocked) and assume it
-is empty, so **don't run them against a database holding synced or ingested
-data**. Use a separate one:
+The database tests hit a real Postgres (not sqlite/mocked) and assume it is empty, so they
+never use the app's database: each run drops and recreates `fantasyiq_test` on the same
+server, migrates it, and points the app at it (`tests/conftest.py`). The Postgres user needs
+permission to create databases (the Compose one does), and the run refuses to reset any
+database not named `fantasyiq_test`. In the Compose stack:
 
 ```bash
-docker-compose exec postgres createdb -U fantasyiq fantasyiq_test
-cd backend
-POSTGRES_DB=fantasyiq_test alembic upgrade head
-POSTGRES_DB=fantasyiq_test pytest
+docker compose exec backend python -m pytest
 ```
 
 ### Frontend
