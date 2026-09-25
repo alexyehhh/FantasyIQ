@@ -447,6 +447,19 @@ def _parse_team_defense(
     return lines
 
 
+def _unless_live(game: GamePayload, parse: Callable[[], Any]) -> Any:
+    """Run the strict kick/defense parser. Only a finished game is held to it: while a game is
+    being played the play feed and the box score can disagree for a moment, and that must not cost
+    the players' stat lines, so the extras are skipped (their last stored values stay) and the next
+    refresh tries again."""
+    try:
+        return parse()
+    except IngestionError:
+        if game.status_state == "final":
+            raise
+        return None
+
+
 class ESPNNFLClient:
     def __init__(self, timeout: float = 20.0, summary_factory: Callable[..., Any] | None = None):
         self._client = ESPNClient(timeout=timeout)
@@ -493,7 +506,12 @@ class ESPNNFLClient:
                 team_id = int(team_box["team"]["id"])
                 for athlete_id, bucket in _group_athletes_by_id(team_box).items():
                     stats.append(_stats_payload(athlete_id, bucket, team_id))
-            return game, stats, _parse_kicks(raw, stats), _parse_team_defense(raw, game, stats)
+            return (
+                game,
+                stats,
+                _unless_live(game, lambda: _parse_kicks(raw, stats)),
+                _unless_live(game, lambda: _parse_team_defense(raw, game, stats)),
+            )
         except (
             ESPNError,
             IngestionError,

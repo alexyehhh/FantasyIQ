@@ -3,7 +3,14 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.db.models import FieldGoalKick, Player, PlayerGameStatsNFL, Team, TeamGameStatsNFL
+from app.db.models import (
+    FieldGoalKick,
+    Game,
+    Player,
+    PlayerGameStatsNFL,
+    Team,
+    TeamGameStatsNFL,
+)
 from app.db.session import SessionLocal
 from data_pipeline.espn import ESPNClient
 from data_pipeline.espn_common import IngestionError, status_state
@@ -637,3 +644,44 @@ def test_ingest_game_leaves_stored_defense_alone_without_play_data(db):
     _ingest_defense(db, no_plays)
 
     assert _stored_defense(db)["KC"].points_allowed == 7
+
+
+def _in_progress(payload: dict) -> dict:
+    payload["header"]["status"] = {"type": {"state": "in"}}
+    return payload
+
+
+def test_a_live_game_whose_plays_do_not_add_up_yet_keeps_its_stat_lines_and_skips_the_kicks():
+    # The box score says 2/3 but only two kicks are in the plays yet: fatal for a finished game
+    # (see the test above), but for a game being played it must not cost the players' lines.
+    payload = _in_progress(_with_plays(_kicker_payload(), [_MADE_24, _MADE_52]))
+
+    game, stats, kicks, _ = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+
+    assert game.status_state == "in_progress"
+    assert any(stat.id == 40 for stat in stats)
+    assert kicks is None
+
+
+def test_a_live_game_whose_drives_do_not_explain_a_defensive_score_still_stores_the_players():
+    payload = _in_progress(_defense_payload())
+    payload["boxscore"]["teams"][0] = _team_box(12, 400, "2-10", 0, 0, 2)  # no return TD to match
+
+    game, stats, _, defense = ESPNNFLClient(summary_factory=lambda _: payload).get_game("g")
+
+    assert game.status_state == "in_progress"
+    assert stats
+    assert defense is None
+
+
+def test_ingest_game_marks_stats_final_only_for_a_finished_game(db):
+    def ingest(payload):
+        game, stats, kicks, defense = ESPNNFLClient(summary_factory=lambda _: payload).get_game("g")
+        ingest_game(db, game, stats, kicks, defense)
+        return db.scalar(select(Game).where(Game.external_id == "401671800"))
+
+    live = ingest(_in_progress(_kicker_payload()))
+    assert (live.status, live.stats_final) == ("in_progress", False)
+
+    final = ingest(_kicker_payload())  # the same game, once it has ended
+    assert (final.status, final.stats_final) == ("final", True)
