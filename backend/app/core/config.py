@@ -39,9 +39,15 @@ class Settings(BaseSettings):
     # (process-wide) and paused entirely when ESPN answers 429/503 (data_pipeline/espn.py).
     espn_min_request_interval_seconds: float = 0.25
 
-    # A game in progress is refreshed at most once per cooldown (data_pipeline/refresh.py). The
-    # timeout is short since one slow game shouldn't hold up the others being refreshed.
+    # The background worker (data_pipeline/worker.py) is the only thing that calls ESPN; these are
+    # how often each of its jobs runs. A game in progress is refreshed at most every cooldown.
+    worker_live_interval_seconds: float = 15.0
+    worker_injuries_interval_seconds: float = 900.0
+    worker_directory_interval_seconds: float = 21600.0
+    worker_backfill_interval_seconds: float = 3600.0
+    worker_backfill_games_per_run: int = 20
     live_refresh_cooldown_seconds: float = 30.0
+    # Short, since one slow game shouldn't hold up the others being refreshed.
     live_refresh_timeout_seconds: float = 8.0
 
     @property

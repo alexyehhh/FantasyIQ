@@ -510,3 +510,54 @@ def test_sync_sport_deactivates_players_missing_from_every_roster_when_all_load(
 
     assert report.deactivated == 1
     assert stale.active is False
+
+
+class _InjuryFeed:
+    def __init__(self, payload):
+        self.payload = payload
+        self.asked = []
+
+    def injuries(self, sport, league):
+        self.asked.append((sport, league))
+        if isinstance(self.payload, Exception):
+            raise self.payload
+        return self.payload
+
+
+def test_refresh_injuries_applies_the_report_with_one_request(db):
+    from data_pipeline.espn_directory import refresh_injuries
+
+    team = Team(name="T", abbreviation="TTT", sport="NFL")
+    db.add(team)
+    db.flush()
+    hurt = Player(external_id="9001", name="Hurt", sport="NFL", team_id=team.id)
+    healed = Player(
+        external_id="9002", name="Healed", sport="NFL", team_id=team.id, injury_status="Out"
+    )
+    db.add_all([hurt, healed])
+    db.flush()
+    athlete = {"links": [{"href": "https://www.espn.com/nfl/player/_/id/9001/hurt"}]}
+    feed = _InjuryFeed({"injuries": [{"injuries": [_injury(athlete=athlete)]}]})
+
+    assert refresh_injuries(db, feed, "NFL") == 1
+
+    assert feed.asked == [("football", "nfl")]
+    assert (hurt.injury_status, healed.injury_status) == ("Questionable", None)
+
+
+def test_refresh_injuries_leaves_the_stored_report_alone_when_the_feed_fails(db):
+    from data_pipeline.espn_directory import refresh_injuries
+
+    team = Team(name="T", abbreviation="TTT", sport="NFL")
+    db.add(team)
+    db.flush()
+    hurt = Player(
+        external_id="9001", name="Hurt", sport="NFL", team_id=team.id, injury_status="Out"
+    )
+    db.add(hurt)
+    db.flush()
+
+    with pytest.raises(ESPNError):
+        refresh_injuries(db, _InjuryFeed(ESPNError("down")), "NFL")
+
+    assert hurt.injury_status == "Out"

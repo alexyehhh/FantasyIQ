@@ -370,6 +370,22 @@ def sync_injuries(
     return applied
 
 
+def refresh_injuries(db: Session, client: ESPNClient, sport: str) -> int:
+    """Re-read only the injury report (one ESPN request) and apply it; returns how many players
+    have an injury. The frequent job uses this; the full sync does it too. If the report can't be
+    fetched or parsed this raises before anything is cleared."""
+    espn_sport, espn_league = LEAGUES[sport]
+    injuries = parse_injuries(client.injuries(espn_sport, espn_league))
+    players = {
+        player.external_id: player
+        for player in db.scalars(select(Player).where(Player.sport == sport))
+        if player.external_id
+    }
+    applied = sync_injuries(injuries, players)
+    db.flush()
+    return applied
+
+
 def sync_games(
     db: Session,
     sport: str,

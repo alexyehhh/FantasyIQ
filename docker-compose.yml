@@ -47,6 +47,23 @@ services:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
+  # The only thing that calls ESPN: keeps live games, injuries, rosters and the schedule current
+  # (see "Live and just-finished games" in the README). Restart it after changing backend code.
+  worker:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: watchfiles --filter python "python -m data_pipeline.worker" app data_pipeline
+
   frontend:
     build:
       context: ./frontend
