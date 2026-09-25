@@ -37,11 +37,16 @@ export default function PlayerStats({
   const profile = profileFor(sport, position);
   const scoringNote = scoring ? describeScoring(scoring, profile.scoringKind) : null;
   const [stat, setStat] = useState(profile.defaultStat);
-  const [range, setRange] = useState<ChartRange>(entries.length > 10 ? 10 : "all");
+  // A game still being played has only a running total, which would drag down the averages and
+  // the spread and skew the trend, so those use finished games only. The game log lists every
+  // game with a stat line, the one in progress marked live.
+  const completed = entries.filter((entry) => entry.status === "final");
+  const [range, setRange] = useState<ChartRange>(completed.length > 10 ? 10 : "all");
   const rows = buildLogRows(entries, schedule, byeWeek);
   const hasSchedule = rows.length > 0;
+  const onlyLive = entries.length > 0 && completed.length === 0;
 
-  if (!profile.tracked || entries.length === 0) {
+  if (!profile.tracked || completed.length === 0) {
     return (
       <div className="mt-5 flex flex-col gap-5">
         <section
@@ -50,12 +55,16 @@ export default function PlayerStats({
         >
           <h2 className="font-display text-xl font-semibold uppercase tracking-[0.06em]">
             {profile.tracked
-              ? "No game stats yet"
+              ? onlyLive
+                ? "No completed games yet"
+                : "No game stats yet"
               : `${profile.untrackedLabel ?? "Stats"} stats aren't tracked for this position yet`}
           </h2>
           <p className="mt-1 text-ink-2">
             {profile.tracked
-              ? "Stats appear here once this season's games have been played. Earlier seasons aren't counted."
+              ? onlyLive
+                ? "The trend, averages and spread appear once a game has finished. The game in progress is in the log below."
+                : "Stats appear here once this season's games have been played. Earlier seasons aren't counted."
               : `${profile.untrackedLabel ?? "Stat"} stats and fantasy points will appear here once they are added.`}
           </p>
         </section>
@@ -79,7 +88,7 @@ export default function PlayerStats({
       <div className="flex min-w-0 flex-col gap-5">
         <StatChart
           sport={sport}
-          entries={entries}
+          entries={completed}
           stat={stat}
           onStatChange={setStat}
           statOptions={profile.rows}
@@ -98,11 +107,11 @@ export default function PlayerStats({
       <aside className="flex min-w-0 flex-col gap-5">
         <AveragesTable
           sport={sport}
-          entries={entries}
+          entries={completed}
           rows={profile.rows}
           selectedStat={stat}
         />
-        <ConsistencyStrip sport={sport} entries={entries} stat={stat} />
+        <ConsistencyStrip sport={sport} entries={completed} stat={stat} />
       </aside>
     </div>
   );

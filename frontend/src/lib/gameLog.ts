@@ -41,11 +41,11 @@ function fromSchedule(game: ScheduleEntry, entry: PlayerGameStatsEntry | null): 
 function fromEntry(entry: PlayerGameStatsEntry): LogRow {
   return {
     key: `game-${entry.game_id}`,
-    kind: "played",
+    kind: entry.status === "final" ? "played" : "upcoming",
     gameId: entry.game_id,
     date: entry.game_date,
     week: entry.week,
-    status: "final",
+    status: entry.status,
     opponent: entry.opponent,
     isHome: entry.is_home,
     teamScore: entry.team_score,

@@ -72,6 +72,7 @@ export function makeEntry(
   return {
     game_id: 1,
     game_date: "2026-01-05T18:00:00Z",
+    status: "final",
     week: null,
     stats: { points: 30 },
     fantasy_points: 30,

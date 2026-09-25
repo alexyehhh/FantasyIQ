@@ -111,9 +111,14 @@ export interface Kick {
   result: "made" | "missed" | "blocked";
 }
 
+/**
+ * One game's stat line. A line from a game that is "in_progress" is its running total so far (the
+ * backend refreshes it on each request), and its `result` stays null until the game is "final".
+ */
 export interface PlayerGameStatsEntry {
   game_id: number;
   game_date: string;
+  status: "scheduled" | "in_progress" | "final";
   week: number | null;
   stats: Record<string, number>;
   /** The game's fantasy points under the scoring the backend used (the sport's default). */

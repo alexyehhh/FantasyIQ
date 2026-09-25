@@ -90,6 +90,25 @@ describe("GameLog", () => {
     expect(bodyRows()[0]).toHaveTextContent("In progress");
   });
 
+  it("shows a game in progress as live with its running score and the stats so far", () => {
+    const live = makeEntry({ game_id: 7, status: "in_progress", stats: { points: 12 }, fantasy_points: 12 });
+    const schedule = [
+      makeScheduleEntry({ game_id: 7, status: "in_progress", team_score: 54, opponent_score: 50 }),
+    ];
+    render(<GameLog sport="NBA" rows={buildLogRows([live], schedule, null)} selectedStat="points" />);
+
+    expect(bodyRows()[0]).toHaveTextContent(/Live 54–50.*12/);
+    expect(bodyRows()[0]).not.toHaveTextContent("In progress");
+    // A game on now is neither a result nor still to come.
+    expect(screen.getByText("0 played · 1 live · 0 upcoming")).toBeInTheDocument();
+  });
+
+  it("says nothing about live games when none are on", () => {
+    render(<GameLog sport="NBA" rows={rowsFor(makeNbaGames(2), makeUpcoming(1))} selectedStat="points" />);
+
+    expect(screen.getByText("2 played · 1 upcoming")).toBeInTheDocument();
+  });
+
   it("notes a played game with no stat line", () => {
     const rows = rowsFor([], [makeScheduleEntry({ status: "final", result: "W", team_score: 90, opponent_score: 80 })]);
     render(<GameLog sport="NBA" rows={rows} selectedStat="points" />);

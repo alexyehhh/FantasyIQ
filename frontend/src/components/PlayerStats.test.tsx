@@ -4,6 +4,7 @@ import PlayerStats from "./PlayerStats";
 import {
   makeEntry,
   makeNbaGames,
+  makeScheduleEntry,
   makeScoringConfig,
   makeUpcoming,
   scheduleFromGames,
@@ -28,6 +29,46 @@ describe("PlayerStats", () => {
 
     expect(screen.getByText("No game stats yet")).toBeInTheDocument();
     expect(screen.queryByLabelText("Game trend")).not.toBeInTheDocument();
+  });
+
+  describe("a game in progress", () => {
+    const liveDate = "2026-02-01T18:00:00Z";
+    const live = makeEntry({
+      game_id: 900,
+      game_date: liveDate,
+      status: "in_progress",
+      stats: { minutes: 12, points: 2, rebounds: 0, assists: 0 },
+      fantasy_points: 2,
+    });
+    const liveGame = makeScheduleEntry({
+      game_id: 900,
+      game_date: liveDate,
+      status: "in_progress",
+      team_score: 40,
+      opponent_score: 38,
+    });
+
+    it("is listed in the game log but left out of the averages, spread and trend", () => {
+      const finished = makeNbaGames(3);
+      renderStats({
+        entries: [live, ...finished],
+        schedule: [...scheduleFromGames(finished), liveGame],
+      });
+
+      expect(screen.getByLabelText("Game log")).toHaveTextContent("3 played · 1 live · 0 upcoming");
+      expect(within(screen.getByLabelText("Game log")).getByText("Live")).toBeInTheDocument();
+      expect(screen.getByLabelText("Averages")).toHaveTextContent("All 3");
+      expect(screen.getByLabelText("Consistency")).toHaveTextContent("3 games");
+      expect(screen.getByLabelText(/ over 3 games, average/)).toBeInTheDocument();
+    });
+
+    it("is the only thing on the page for a player whose first game of the season is on now", () => {
+      renderStats({ entries: [live], schedule: [liveGame] });
+
+      expect(screen.getByText("No completed games yet")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Game trend")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Game log")).toHaveTextContent("Live 40–38");
+    });
   });
 
   it("still lists the schedule for a player who hasn't played yet", () => {

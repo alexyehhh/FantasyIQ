@@ -86,7 +86,8 @@ export default function GameLog({
   }
   const grouped = groups.length > 0;
   const played = rows.filter((row) => row.kind === "played").length;
-  const upcoming = rows.filter((row) => row.kind === "upcoming").length;
+  const live = rows.filter((row) => row.status === "in_progress").length;
+  const upcoming = rows.filter((row) => row.kind === "upcoming").length - live;
   const best = Math.max(
     ...rows.map((row) => (row.entry ? statValue(row.entry, selectedStat) : -Infinity)),
   );
@@ -108,7 +109,8 @@ export default function GameLog({
           Game log
         </h2>
         <span className="text-[12.5px] text-ink-3">
-          {played} played · {upcoming} upcoming
+          {played} played · {live > 0 ? `${live} live · ` : ""}
+          {upcoming} upcoming
         </span>
       </div>
 
@@ -184,10 +186,18 @@ export default function GameLog({
                       : "—"}
                   </td>
                   <td className={`${META_CELL} tabular-nums`}>
-                    {row.kind === "upcoming" ? (
-                      <span className="text-ink-2">
-                        {row.status === "in_progress" ? "Live" : row.date ? formatGameTime(row.date) : "—"}
-                      </span>
+                    {row.status === "in_progress" ? (
+                      <>
+                        <span className="font-bold text-accent">Live</span>
+                        {row.teamScore !== null && row.opponentScore !== null && (
+                          <span className="text-ink-2">
+                            {" "}
+                            {row.teamScore}–{row.opponentScore}
+                          </span>
+                        )}
+                      </>
+                    ) : row.kind === "upcoming" ? (
+                      <span className="text-ink-2">{row.date ? formatGameTime(row.date) : "—"}</span>
                     ) : row.result && row.teamScore !== null ? (
                       <>
                         <span

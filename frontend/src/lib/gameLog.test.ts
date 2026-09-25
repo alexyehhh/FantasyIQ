@@ -73,6 +73,19 @@ describe("buildLogRows", () => {
     expect(rows.some((row) => row.kind === "bye")).toBe(false);
   });
 
+  it("lists a live stat line as a game in progress rather than a result when there is no schedule", () => {
+    const rows = buildLogRows(
+      [makeEntry({ game_id: 1, status: "in_progress" }), makeEntry({ game_id: 2 })],
+      [],
+      null,
+    );
+
+    expect(rows.map((row) => [row.gameId, row.kind, row.status])).toEqual([
+      [1, "upcoming", "in_progress"],
+      [2, "played", "final"],
+    ]);
+  });
+
   it("doesn't duplicate a game that has both a stat line and a schedule entry", () => {
     const rows = buildLogRows(
       [makeEntry({ game_id: 1 })],
