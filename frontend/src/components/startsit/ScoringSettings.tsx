@@ -2,12 +2,11 @@
 
 import { useState } from "react";
 import type { ProjectionSource, Sport } from "@/lib/api";
-import { EDITABLE_WEIGHTS, type ScoringChoice } from "@/lib/startSit";
+import { EDITABLE_WEIGHTS } from "@/lib/startSit";
 
 interface ScoringSettingsProps {
   sport: Sport;
   sources: ProjectionSource[];
-  choice: ScoringChoice;
   /** The points per unit the current scoring choice uses: what the fields show. */
   weights: Record<string, number>;
   onWeight: (stat: string, value: number) => void;
@@ -51,7 +50,6 @@ function WeightInput({
 export default function ScoringSettings({
   sport,
   sources,
-  choice,
   weights,
   onWeight,
   onReset,

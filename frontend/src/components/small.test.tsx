@@ -105,7 +105,7 @@ describe("ConsistencyStrip", () => {
     const entries = [10, 20, 30, 40, 50].map((points, index) =>
       makeEntry({ game_id: index, stats: { points } }),
     );
-    render(<ConsistencyStrip sport="NBA" entries={entries} stat="points" />);
+    render(<ConsistencyStrip entries={entries} stat="points" />);
 
     expect(screen.getByText("Floor").previousSibling).toHaveTextContent("10");
     expect(screen.getByText("Median").previousSibling).toHaveTextContent("30");
@@ -119,7 +119,7 @@ describe("ConsistencyStrip", () => {
     const entries = [0, 0, 30, 30, 90].map((points, index) =>
       makeEntry({ game_id: index, stats: { points } }),
     );
-    render(<ConsistencyStrip sport="NBA" entries={entries} stat="points" />);
+    render(<ConsistencyStrip entries={entries} stat="points" />);
 
     expect(screen.getByText("Median").previousSibling).toHaveTextContent("30");
     expect(screen.getByText("Average").previousSibling).toHaveTextContent("30");
@@ -127,7 +127,7 @@ describe("ConsistencyStrip", () => {
     const skewed = [0, 0, 10, 10, 80].map((points, index) =>
       makeEntry({ game_id: index, stats: { points } }),
     );
-    render(<ConsistencyStrip sport="NBA" entries={skewed} stat="points" />);
+    render(<ConsistencyStrip entries={skewed} stat="points" />);
 
     expect(screen.getAllByText("Average")[1].previousSibling).toHaveTextContent("20");
     expect(screen.getAllByText("Median")[1].previousSibling).toHaveTextContent("10");
@@ -135,21 +135,21 @@ describe("ConsistencyStrip", () => {
 
   it("names the average in the plot's description for screen readers", () => {
     const entries = [10, 20, 30].map((points, index) => makeEntry({ game_id: index, stats: { points } }));
-    render(<ConsistencyStrip sport="NBA" entries={entries} stat="points" />);
+    render(<ConsistencyStrip entries={entries} stat="points" />);
 
     expect(screen.getByRole("img", { name: /average 20/ })).toBeInTheDocument();
   });
 
   it("draws one dot per game, even when every game is identical", () => {
     const entries = [1, 2, 3].map((id) => makeEntry({ game_id: id, stats: { points: 12 } }));
-    const { container } = render(<ConsistencyStrip sport="NBA" entries={entries} stat="points" />);
+    const { container } = render(<ConsistencyStrip entries={entries} stat="points" />);
 
     expect(container.querySelectorAll("circle")).toHaveLength(3);
   });
 
   it("averages the two middle games for an even number of games", () => {
     const entries = [10, 20].map((points, index) => makeEntry({ game_id: index, stats: { points } }));
-    render(<ConsistencyStrip sport="NBA" entries={entries} stat="points" />);
+    render(<ConsistencyStrip entries={entries} stat="points" />);
 
     expect(screen.getByText("Median").previousSibling).toHaveTextContent("15");
   });

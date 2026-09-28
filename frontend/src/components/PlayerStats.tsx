@@ -87,7 +87,6 @@ export default function PlayerStats({
     <div className="mt-5 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="flex min-w-0 flex-col gap-5">
         <StatChart
-          sport={sport}
           entries={completed}
           stat={stat}
           onStatChange={setStat}
@@ -111,7 +110,7 @@ export default function PlayerStats({
           rows={profile.rows}
           selectedStat={stat}
         />
-        <ConsistencyStrip sport={sport} entries={completed} stat={stat} />
+        <ConsistencyStrip entries={completed} stat={stat} />
       </aside>
     </div>
   );

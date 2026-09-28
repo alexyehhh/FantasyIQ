@@ -1,5 +1,5 @@
 import { buildLogRows } from "./gameLog";
-import { makeEntry, makeScheduleEntry, makeTeam } from "@/test/fixtures";
+import { makeEntry, makeScheduleEntry } from "@/test/fixtures";
 
 const game = (id: number, day: number, overrides = {}) =>
   makeScheduleEntry({

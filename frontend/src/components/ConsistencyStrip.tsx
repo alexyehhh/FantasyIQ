@@ -1,8 +1,7 @@
-import type { PlayerGameStatsEntry, Sport } from "@/lib/api";
+import type { PlayerGameStatsEntry } from "@/lib/api";
 import { STAT_LABELS, average, formatStat, statValue } from "@/lib/stats";
 
 interface ConsistencyStripProps {
-  sport: Sport;
   /** Most recent game first. */
   entries: PlayerGameStatsEntry[];
   stat: string;
@@ -20,7 +19,7 @@ function median(sorted: number[]): number {
 }
 
 /** Every game as a dot on one axis: how spread out a player's output is, at a glance. */
-export default function ConsistencyStrip({ sport, entries, stat }: ConsistencyStripProps) {
+export default function ConsistencyStrip({ entries, stat }: ConsistencyStripProps) {
   const values = entries.map((entry) => statValue(entry, stat));
   const sorted = [...values].sort((a, b) => a - b);
   const floor = sorted[0];

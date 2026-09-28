@@ -12,14 +12,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { PlayerGameStatsEntry, Sport } from "@/lib/api";
+import type { PlayerGameStatsEntry } from "@/lib/api";
 import { formatGameDate } from "@/lib/format";
 import { STAT_LABELS, average, formatStat, statValue } from "@/lib/stats";
 
 export type ChartRange = 5 | 10 | "all";
 
 interface StatChartProps {
-  sport: Sport;
   /** Every game, most recent first, as the API returns them. */
   entries: PlayerGameStatsEntry[];
   stat: string;
@@ -49,7 +48,6 @@ export function rangeOptions(total: number): { value: ChartRange; label: string 
 }
 
 export default function StatChart({
-  sport,
   entries,
   stat,
   onStatChange,

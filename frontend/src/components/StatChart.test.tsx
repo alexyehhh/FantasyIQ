@@ -7,7 +7,6 @@ const STAT_OPTIONS = ["fpts", "points", "rebounds"];
 
 function renderChart(overrides: Partial<React.ComponentProps<typeof StatChart>> = {}) {
   const props = {
-    sport: "NBA" as const,
     entries: makeNbaGames(12),
     stat: "points",
     onStatChange: jest.fn(),

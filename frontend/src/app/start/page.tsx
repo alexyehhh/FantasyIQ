@@ -494,7 +494,6 @@ export default function StartPage() {
             <ScoringSettings
               sport={sport}
               sources={sportSources}
-              choice={choice}
               weights={activeWeights}
               onWeight={editWeight}
               onReset={resetWeights}

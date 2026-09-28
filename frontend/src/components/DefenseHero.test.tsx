@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import DefenseHero from "./DefenseHero";
 import { makeDefenseDetail, makeDefenseEntry, makeSeasonSummary, makeTeam } from "@/test/fixtures";
 
