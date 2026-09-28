@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from sqlalchemy.orm import Session
 
@@ -39,6 +40,10 @@ class AgentConfigError(RuntimeError):
 
 class AgentRoundLimitExceeded(RuntimeError):
     """The model kept calling tools past MAX_ROUNDS without answering."""
+
+
+class AgentUpstreamError(RuntimeError):
+    """Gemini itself failed — overloaded, rate-limited on Google's side, or a bad request."""
 
 
 @dataclass
@@ -82,9 +87,14 @@ def ask(db: Session, message: str, *, client: genai.Client | None = None) -> Age
     trace: list[ToolCallLog] = []
 
     for _round in range(MAX_ROUNDS):
-        response = client.models.generate_content(
-            model=settings.gemini_model, contents=contents, config=config
-        )
+        try:
+            response = client.models.generate_content(
+                model=settings.gemini_model, contents=contents, config=config
+            )
+        except genai_errors.APIError as exc:
+            raise AgentUpstreamError(
+                f"Gemini error {exc.code} ({exc.status}): {exc.message}"
+            ) from exc
         candidates = response.candidates or []
         if not candidates or candidates[0].content is None:
             return AgentReply(text=response.text or "", tool_calls=trace)

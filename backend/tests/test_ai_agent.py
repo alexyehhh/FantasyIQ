@@ -6,6 +6,7 @@ this file is about the loop's control flow, not what any one tool does (see test
 for those)."""
 
 import pytest
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from app.ai import agent
@@ -29,7 +30,10 @@ class _FakeModels:
 
     def generate_content(self, *, model, contents, config):
         self.calls.append({"model": model, "contents": list(contents), "config": config})
-        return self._responses.pop(0)
+        item = self._responses.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
 
 class _FakeClient:
@@ -84,6 +88,16 @@ def test_ask_stops_after_the_round_limit(monkeypatch):
     client = _FakeClient(always_calls)
 
     with pytest.raises(agent.AgentRoundLimitExceeded):
+        agent.ask(None, "Who should I start?", client=client)
+
+
+def test_ask_wraps_a_gemini_api_error():
+    upstream = genai_errors.ServerError(
+        503, {"error": {"code": 503, "message": "High demand", "status": "UNAVAILABLE"}}
+    )
+    client = _FakeClient([upstream])
+
+    with pytest.raises(agent.AgentUpstreamError):
         agent.ask(None, "Who should I start?", client=client)
 
 

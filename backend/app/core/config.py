@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # bumping as newer ones ship.
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-flash-latest"
+    # In-process limits on the analyst endpoint, to protect that quota (one request costs
+    # several Gemini calls). These are conservative guesses, not Google's published numbers —
+    # they stopped publishing a fixed table for the free tier. Check your actual limits at
+    # https://aistudio.google.com/rate-limit and adjust.
+    analyst_rate_limit_per_minute: int = 8
+    analyst_rate_limit_per_day: int = 150
 
     @property
     def database_url(self) -> str:

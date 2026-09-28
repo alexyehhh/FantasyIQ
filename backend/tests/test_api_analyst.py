@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 from app.ai import agent
 from app.ai.agent import AgentReply, ToolCallLog
+from app.ai.rate_limit import RateLimiter
+from app.api.v1 import analyst
 from app.db.session import SessionLocal, get_db
 from app.main import app
 
@@ -32,6 +34,14 @@ def client(db):
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture(autouse=True)
+def generous_rate_limit(monkeypatch):
+    """The endpoint's limiter is a module-level singleton so it persists across requests in
+    production; give each test its own generous one so call counts don't leak between tests
+    (the dedicated rate-limit test below swaps in a tight one instead)."""
+    monkeypatch.setattr(analyst, "_limiter", RateLimiter([(1000, 60), (1000, 86400)]))
 
 
 def test_start_sit_returns_the_explanation_and_tool_trace(client, monkeypatch):
@@ -99,3 +109,28 @@ def test_start_sit_502s_when_the_model_never_answers(client, monkeypatch):
         "/api/v1/analyst/start-sit", json={"candidates": [{"kind": "player", "entity_id": 1}]}
     )
     assert response.status_code == 502
+
+
+def test_start_sit_502s_when_gemini_itself_fails(client, monkeypatch):
+    def fake_ask(db, message, **kwargs):
+        raise agent.AgentUpstreamError("Gemini error 503 (UNAVAILABLE): High demand")
+
+    monkeypatch.setattr(agent, "ask", fake_ask)
+
+    response = client.post(
+        "/api/v1/analyst/start-sit", json={"candidates": [{"kind": "player", "entity_id": 1}]}
+    )
+    assert response.status_code == 502
+
+
+def test_start_sit_429s_once_the_rate_limit_is_hit(client, monkeypatch):
+    monkeypatch.setattr(analyst, "_limiter", RateLimiter([(1, 60)]))
+    monkeypatch.setattr(agent, "ask", lambda db, message, **kwargs: AgentReply(text="ok"))
+    payload = {"candidates": [{"kind": "player", "entity_id": 1}]}
+
+    first = client.post("/api/v1/analyst/start-sit", json=payload)
+    second = client.post("/api/v1/analyst/start-sit", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "Retry-After" in second.headers
