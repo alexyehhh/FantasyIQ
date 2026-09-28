@@ -48,6 +48,13 @@ def test_minutes_are_normalized_to_decimal_minutes():
     assert _parse_minutes(None) == 0.0
 
 
+def test_did_not_play_is_zero_minutes_in_both_old_and_current_box_scores():
+    # "-" is the current-season marker; "--" is what older ESPN box scores send for the same
+    # thing (verified against a real historical game where the athlete's whole line was zero).
+    assert _parse_minutes("-") == 0.0
+    assert _parse_minutes("--") == 0.0
+
+
 def test_invalid_minutes_are_rejected():
     with pytest.raises(IngestionError):
         _parse_minutes("not-a-minute-value")
@@ -94,6 +101,20 @@ def test_espn_client_normalizes_summary():
     assert (game.home_score, game.visitor_score) == (112, 104)
     assert stats[0].player.first_name == "Jaylen"
     assert stats[0].min == "PT25M01.00S"
+
+
+def test_a_did_not_play_entry_with_no_athlete_id_is_skipped_not_fatal():
+    # Real historical box scores include inactive players as a bare {"didNotPlay": true} entry
+    # with no athlete id at all (verified against a real ESPN game payload); it must not sink
+    # the rest of that team's real stats.
+    payload = _summary_payload()
+    payload["boxscore"]["players"][0]["statistics"][0]["athletes"].append(
+        {"athlete": {"links": [], "shortName": "Olbrich"}, "didNotPlay": True, "stats": []}
+    )
+
+    _, stats = ESPNNBAClient(summary_factory=lambda _: payload).get_game("401705000")
+
+    assert [s.player.first_name for s in stats] == ["Jaylen"]
 
 
 def _summary_payload() -> dict:

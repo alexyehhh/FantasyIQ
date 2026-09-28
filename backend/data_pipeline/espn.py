@@ -198,16 +198,20 @@ class ESPNClient:
         return self.get(sport, league, "teams", limit="100")
 
     def schedule(
-        self, sport: str, league: str, team_id: str, season_type: int = 2
+        self, sport: str, league: str, team_id: str, season_type: int = 2, season: int | None = None
     ) -> dict[str, Any]:
         """A team's full schedule for one season type (2 = regular season).
 
         Without `seasontype` ESPN returns whichever type is "current", which for
-        the NBA in the offseason is preseason.
+        the NBA in the offseason is preseason. `season` is likewise omitted by
+        default so current-season callers are unaffected; passed, it asks for that
+        specific year's schedule instead of the current one (verified against the
+        real API: same payload shape, an added top-level `requestedSeason`).
         """
-        return self.get(
-            sport, league, f"teams/{team_id}/schedule", seasontype=str(season_type)
-        )
+        params = {"seasontype": str(season_type)}
+        if season is not None:
+            params["season"] = str(season)
+        return self.get(sport, league, f"teams/{team_id}/schedule", **params)
 
     def roster(self, sport: str, league: str, team_id: str) -> dict[str, Any]:
         return self.get(sport, league, f"teams/{team_id}/roster")

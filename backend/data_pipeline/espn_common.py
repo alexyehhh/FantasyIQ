@@ -78,3 +78,8 @@ def team_external_id(sport: str, espn_team_id: int | str) -> str:
     both team 1 while teams.external_id is unique across the whole table.
     """
     return f"{sport.lower()}:{espn_team_id}"
+
+
+def espn_team_id(external_id: str) -> str:
+    """The inverse of `team_external_id`: the bare ESPN id ESPN's API expects."""
+    return external_id.split(":", 1)[1]

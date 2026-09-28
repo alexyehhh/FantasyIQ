@@ -32,6 +32,7 @@ from data_pipeline.espn_directory import (
     parse_schedule,
     parse_teams,
     sync_games,
+    sync_historical_season,
     sync_injuries,
     sync_roster,
     sync_sport,
@@ -292,9 +293,12 @@ def test_espn_client_schedule_requests_the_regular_season_and_sends_no_browser_u
     client = ESPNClient(client=httpx.Client(transport=httpx.MockTransport(handler),
                                             base_url="https://site.api.espn.com"))
     client.schedule("basketball", "nba", "13")
+    client.schedule("basketball", "nba", "13", season=2024)
 
     assert requests[0].url.path == "/apis/site/v2/sports/basketball/nba/teams/13/schedule"
     assert requests[0].url.params["seasontype"] == "2"
+    assert "season" not in requests[0].url.params  # current-season callers are unaffected
+    assert requests[1].url.params["season"] == "2024"
 
     real = ESPNClient()
     try:
@@ -577,3 +581,69 @@ def test_refresh_injuries_leaves_the_stored_report_alone_when_the_feed_fails(db)
         refresh_injuries(db, _InjuryFeed(ESPNError("down")), "NFL")
 
     assert hurt.injury_status == "Out"
+
+
+# ---------------------------------------------------------------------------
+# Historical season backfill
+# ---------------------------------------------------------------------------
+
+
+class _FakeHistoricalESPN:
+    """Serves one shared game (home=team 1, away=team 2) per requested season."""
+
+    def __init__(self, fail_team_id: str | None = None):
+        self.fail_team_id = fail_team_id
+        self.requested = []
+
+    def schedule(self, sport, league, team_id, season_type=2, season=None):
+        self.requested.append((team_id, season))
+        if team_id == self.fail_team_id:
+            raise ESPNError("boom")
+        return {"events": [_event(f"g{season}", "post", 110, 104, year=season)]}
+
+
+def test_sync_historical_season_discovers_and_upserts_past_games(db):
+    teams = sync_teams(db, "NFL", [_team_record(1, "ATL"), _team_record(2, "BOS")])
+    client = _FakeHistoricalESPN()
+
+    report = sync_historical_season(db, client, "NFL", 2024)
+
+    assert (report.games, report.failures) == (1, [])
+    game = db.scalar(select(Game).where(Game.external_id == "g2024"))
+    assert game.season == "2024"
+    assert (game.home_team_id, game.away_team_id) == (teams[1].id, teams[2].id)
+    assert (game.status, game.home_score, game.away_score) == ("final", 110, 104)
+    # both teams' schedules were asked, for the requested season
+    assert {season for _, season in client.requested} == {2024}
+
+
+def test_sync_historical_season_is_idempotent(db):
+    sync_teams(db, "NFL", [_team_record(1, "ATL"), _team_record(2, "BOS")])
+    client = _FakeHistoricalESPN()
+
+    sync_historical_season(db, client, "NFL", 2024)
+    sync_historical_season(db, client, "NFL", 2024)
+
+    rows = db.scalars(select(Game).where(Game.external_id == "g2024")).all()
+    assert len(rows) == 1
+
+
+def test_sync_historical_season_leaves_bye_week_and_roster_alone(db):
+    teams = sync_teams(db, "NFL", [_team_record(1, "ATL"), _team_record(2, "BOS")])
+    teams[1].bye_week = 9
+    db.flush()
+    client = _FakeHistoricalESPN()
+
+    sync_historical_season(db, client, "NFL", 2024)
+
+    assert db.get(Team, teams[1].id).bye_week == 9
+    assert db.scalars(select(Player)).all() == []
+
+
+def test_sync_historical_season_reports_a_failed_team_and_still_syncs_the_rest(db):
+    sync_teams(db, "NFL", [_team_record(1, "ATL"), _team_record(2, "BOS"), _team_record(3, "NYG")])
+
+    report = sync_historical_season(db, _FakeHistoricalESPN(fail_team_id="3"), "NFL", 2024)
+
+    assert report.failures == ["NYG schedule"]
+    assert report.games == 1

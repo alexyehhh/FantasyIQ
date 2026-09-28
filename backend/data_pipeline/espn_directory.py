@@ -10,6 +10,15 @@ Run for one sport or both:
 
     python -m data_pipeline.espn_directory --sport NBA
     python -m data_pipeline.espn_directory --sport all
+
+It can also backfill one or more *past* seasons' schedules for teams already in the
+database (ESPN's `teams/{id}/schedule` accepts a `season` year and returns the same
+payload shape as the current season, verified against the live API). This only
+discovers games and records their final scores; it does not touch a team's roster,
+injuries, or current-season bye week. Box scores for the games it finds are then
+picked up by the normal `data_pipeline.backfill` job.
+
+    python -m data_pipeline.espn_directory --sport NFL --season 2024 --season 2025
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ from data_pipeline.espn import ESPNClient, ESPNError
 from data_pipeline.espn_common import (
     IngestionError,
     competitor_score,
+    espn_team_id,
     season_label,
     status_state,
     team_external_id,
@@ -507,6 +517,88 @@ def sync_sport(db: Session, client: ESPNClient, sport: str) -> SyncReport:
     return report
 
 
+@dataclass
+class HistoricalSyncReport:
+    sport: str
+    season: int
+    games: int = 0
+    failures: list[str] = field(default_factory=list)
+
+    def summary(self) -> str:
+        line = f"{self.sport} {self.season}: {self.games} games"
+        if self.failures:
+            line += f"; {len(self.failures)} failed: {', '.join(self.failures)}"
+        return line
+
+
+def sync_historical_season(
+    db: Session, client: ESPNClient, sport: str, season: int
+) -> HistoricalSyncReport:
+    """Discover one past season's games from every team already in the database and upsert them.
+
+    Reuses `parse_schedule`/`sync_games` unchanged — ESPN's `season`-scoped payload has the same
+    shape as the current-season one it already handles (verified against the live API). Only
+    `games` rows are touched: a team's roster, injuries and current-season `bye_week` are owned by
+    `sync_sport` and are left alone here. Assumes each team already in the database (kept current
+    by the regular directory sync) existed under the same ESPN id in `season`, which holds for the
+    1-2 prior seasons this is meant for; it would not hold for a franchise that changed ESPN ids
+    (an expansion team or relocation), which isn't a concern for NBA/NFL in that window.
+    """
+    espn_sport, espn_league = LEAGUES[sport]
+    report = HistoricalSyncReport(sport=sport, season=season)
+
+    teams_by_espn_id = {
+        int(espn_team_id(team.external_id)): team
+        for team in db.scalars(select(Team).where(Team.sport == sport))
+        if team.external_id
+    }
+    games_by_external_id = {
+        game.external_id: game
+        for game in db.scalars(select(Game).where(Game.sport == sport))
+        if game.external_id
+    }
+    seen_games: set[str] = set()
+
+    for espn_id, team in teams_by_espn_id.items():
+        try:
+            raw_schedule = client.schedule(espn_sport, espn_league, str(espn_id), season=season)
+            schedule = parse_schedule(sport, raw_schedule)
+            fresh = [game for game in schedule if game.id not in seen_games]
+            seen_games.update(game.id for game in fresh)
+            report.games += sync_games(db, sport, fresh, teams_by_espn_id, games_by_external_id)
+        except (ESPNError, IngestionError):
+            report.failures.append(f"{team.abbreviation} schedule")
+
+    db.flush()
+    return report
+
+
+def run_historical(sports: list[str], seasons: list[int]) -> list[HistoricalSyncReport]:
+    """Backfill each sport's schedule for each season, committing after every season so a crash
+    partway through only has to redo that one season's worth of requests, not the whole run."""
+    from app.db.session import SessionLocal
+
+    settings = get_settings()
+    reports: list[HistoricalSyncReport] = []
+    for sport in sports:
+        timeout = (
+            settings.nba_api_timeout_seconds if sport == "NBA" else settings.nfl_api_timeout_seconds
+        )
+        for season in seasons:
+            client = ESPNClient(timeout=timeout)
+            db = SessionLocal()
+            try:
+                reports.append(sync_historical_season(db, client, sport, season))
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                client.close()
+                db.close()
+    return reports
+
+
 def run(sports: list[str]) -> list[SyncReport]:
     from app.db.session import SessionLocal
 
@@ -535,8 +627,19 @@ def main() -> None:
         description="Sync teams, rosters, injuries and schedules from ESPN"
     )
     parser.add_argument("--sport", choices=["NBA", "NFL", "all"], default="all")
+    parser.add_argument(
+        "--season",
+        type=int,
+        action="append",
+        help="Backfill this past season's schedule instead of the current directory sync "
+        "(repeatable, e.g. --season 2024 --season 2025)",
+    )
     args = parser.parse_args()
     sports = list(LEAGUES) if args.sport == "all" else [args.sport]
+    if args.season:
+        for historical_report in run_historical(sports, args.season):
+            print(historical_report.summary())
+        return
     for report in run(sports):
         print(report.summary())
 

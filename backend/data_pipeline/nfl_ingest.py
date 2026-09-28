@@ -268,10 +268,13 @@ def _kickers_by_team(raw: dict[str, Any]) -> dict[int, dict[int, str]]:
 def _parse_kicks(raw: dict[str, Any], stats: list[StatsPayload]) -> list[KickPayload] | None:
     """Every field goal attempt in the game's plays, or None when it has no play data.
 
-    Distance is the play's `statYardage`; a blocked kick reports 0 there, so its distance
-    comes from the play text. The kicking team is the play's `start.team` (`teamParticipants`
-    lists both teams). Raises IngestionError when a kick cannot be attributed or the kicks do
-    not add up to the box score, rather than storing a distance-scored line that is wrong.
+    Distance is the play's `statYardage` when it's a real distance (a positive number); a kick
+    that wasn't made reports something else there instead — 0 in current-season payloads, but a
+    negative net-field-position change in older ones (verified against real historical games, for
+    both a missed and a blocked kick) — so any non-positive value falls back to the play text. The
+    kicking team is the play's `start.team` (`teamParticipants` lists both teams). Raises
+    IngestionError when a kick cannot be attributed or the kicks do not add up to the box score,
+    rather than storing a distance-scored line that is wrong.
     """
     drives = raw.get("drives")
     if not isinstance(drives, dict):
@@ -288,7 +291,10 @@ def _parse_kicks(raw: dict[str, Any], stats: list[StatsPayload]) -> list[KickPay
             if result is None:
                 continue
             match = _KICK_TEXT.match(play.get("text", ""))
-            distance = play.get("statYardage") or (match and int(match["distance"]))
+            yardage = play.get("statYardage")
+            is_real_distance = isinstance(yardage, (int, float)) and yardage > 0
+            made_distance = int(yardage) if is_real_distance else None
+            distance = made_distance or (match and int(match["distance"]))
             team_kickers = kickers.get(int(play["start"]["team"]["id"]), {})
             named = [
                 athlete_id
@@ -505,6 +511,12 @@ class ESPNNFLClient:
             for team_box in raw.get("boxscore", {}).get("players", []):
                 team_id = int(team_box["team"]["id"])
                 for athlete_id, bucket in _group_athletes_by_id(team_box).items():
+                    if athlete_id <= 0:
+                        # A synthetic "Team" pseudo-athlete (negative id) that some categories
+                        # (like "defensive") carry alongside real players; skipping it must not
+                        # sink the rest of the team's real stats, but a real player's stats still
+                        # fail the whole game if they don't add up.
+                        continue
                     stats.append(_stats_payload(athlete_id, bucket, team_id))
             return (
                 game,

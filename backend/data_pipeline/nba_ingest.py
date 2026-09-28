@@ -84,7 +84,9 @@ class StatsPayload(BaseModel):
 
 
 def _parse_minutes(value: str | int | float | None) -> float:
-    if value is None or value == "" or value == "-":
+    # Did-not-play is "-" in current-season box scores, "--" in older ones (verified against
+    # ESPN's real payload for a historical game: a DNP athlete's full stat line is all zeros).
+    if value is None or value == "" or value == "-" or value == "--":
         return 0.0
     if isinstance(value, (int, float)):
         return float(value)
@@ -133,6 +135,14 @@ def _made(value: Any) -> int:
     if isinstance(value, str) and "-" in value:
         return int(value.partition("-")[0] or 0)
     return int(value or 0)
+
+
+def _has_player_id(athlete: dict[str, Any]) -> bool:
+    """Whether an athlete entry identifies a real player, not e.g. a bare DNP placeholder."""
+    try:
+        return int(athlete["id"]) > 0
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _stats_payload(raw: dict[str, Any], team_id: int, key_names: list[str]) -> StatsPayload:
@@ -236,10 +246,14 @@ class ESPNNBAClient:
                 team_id = int(team_box["team"]["id"])
                 for group in team_box.get("statistics", []):
                     key_names = group.get("keys", [])
-                    stats.extend(
-                        _stats_payload(player, team_id, key_names)
-                        for player in group.get("athletes", [])
-                    )
+                    for player in group.get("athletes", []):
+                        if not _has_player_id(player.get("athlete", player)):
+                            # e.g. an inactive/did-not-play entry with no athlete id at all
+                            # ("didNotPlay": true, no usable stats either way) — skipping this
+                            # one entry must not sink the rest of the team's real stats, but a
+                            # real player's stats still fail the whole game if they don't add up.
+                            continue
+                        stats.append(_stats_payload(player, team_id, key_names))
             return game, stats
         except (ESPNError, KeyError, StopIteration, TypeError, ValueError, ValidationError) as exc:
             if isinstance(exc, ESPNError):

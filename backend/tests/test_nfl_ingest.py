@@ -118,6 +118,26 @@ def test_espn_client_merges_stats_across_categories():
     assert receiver.receiving_touchdowns == 1
 
 
+def test_a_synthetic_team_pseudo_athlete_is_skipped_not_fatal():
+    # Real box scores carry team defensive totals as a fake athlete (negative id, name "Team")
+    # in categories like "defensive" (verified against a real ESPN game payload); it must not
+    # sink the rest of that team's real player stats.
+    payload = _summary_payload()
+    payload["boxscore"]["players"][0]["statistics"].append({
+        "name": "defensive",
+        "keys": ["TOT", "SACKS"],
+        "athletes": [{
+            "athlete": {"id": "-8825", "firstName": "", "lastName": "Team",
+                        "displayName": " Team"},
+            "stats": ["5", "1"],
+        }],
+    })
+
+    _, stats, _, _ = ESPNNFLClient(summary_factory=lambda _: payload).get_game("401671800")
+
+    assert {stat.id for stat in stats} == {30, 31}
+
+
 def _summary_payload() -> dict:
     return {
         "header": {
@@ -363,6 +383,11 @@ _MISSED_43 = _kick_play(
 _BLOCKED_49 = _kick_play(
     "p4", "Blocked Field Goal", "D.Zvada 49 yard field goal is BLOCKED (C.Granderson)", 0
 )
+# Older payloads report a negative net-field-position change for a missed (or blocked) kick
+# instead of 0 (verified against a real historical game); its distance is only in the text too.
+_MISSED_NEGATIVE_44 = _kick_play(
+    "p5", "Field Goal Missed", "D.Zvada 44 yard field goal is No Good, Wide Left", -8
+)
 
 
 def _kicks(payload: dict):
@@ -383,6 +408,12 @@ def test_a_blocked_kick_takes_its_distance_from_the_text_and_counts_as_an_attemp
     kicks = _kicks(_with_plays(_kicker_payload(), [_MADE_24, _MADE_52, _BLOCKED_49]))
 
     assert (kicks[2].distance, kicks[2].result) == (49, "blocked")
+
+
+def test_a_negative_statyardage_on_a_miss_falls_back_to_the_text_distance():
+    kicks = _kicks(_with_plays(_kicker_payload(), [_MADE_24, _MADE_52, _MISSED_NEGATIVE_44]))
+
+    assert (kicks[2].distance, kicks[2].result) == (44, "missed")
 
 
 def test_a_game_with_no_play_data_has_no_kicks_rather_than_an_empty_list():
