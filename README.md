@@ -322,6 +322,31 @@ the projected points allowed (assumed spread `POINTS_ALLOWED_SD` = 9.5 points), 
 up the average, and a kicker's Sleeper distance ranges are treated as evenly spread
 (`approximate` is set if a bracket boundary falls inside one).
 
+### AI Analyst
+
+`POST /api/v1/analyst/start-sit` explains a start/sit decision in plain language. It needs a
+Gemini API key (`GEMINI_API_KEY` in `.env`, free at https://aistudio.google.com/apikey) — with
+none set, the endpoint answers `503` rather than failing partway through.
+
+```
+POST /api/v1/analyst/start-sit
+{"candidates": [{"kind": "player", "entity_id": 1384}, {"kind": "defense", "entity_id": 67}],
+ "week": 3, "scoring": "default"}
+```
+
+The agent (`app/ai/`) is a manual Gemini tool-calling loop, not the SDK's automatic mode, so
+every call is logged (`app.ai` logger) before the result goes back to the model. Three tools,
+each a thin wrapper over the services above (never a second implementation of their logic):
+`get_stats` (identity, season totals with rank, recent games), `get_matchup` (schedule only —
+there's no opponent-strength model yet, so it never rates a matchup as easy or tough), and
+`get_projection` (wraps `/projections`, above). The system prompt tells the model to cite only
+numbers it just got from a tool call and to say when something (trades, waivers, other leagues)
+isn't supported yet — none of that exists here.
+
+This is read-only by design, including once Yahoo linking exists: the analyst reads league data
+and suggests moves, it never submits anything (a trade offer, a roster change) back to Yahoo on
+its own.
+
 ### Who should I start? (frontend)
 
 `/start` (nav: Start / Sit) is a FantasyPros-style start/sit page. Search for players (or team

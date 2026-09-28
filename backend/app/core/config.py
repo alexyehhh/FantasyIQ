@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     sleeper_timeout_seconds: float = 15.0
     sleeper_cache_ttl_seconds: float = 900.0
 
+    # The AI Analyst (Milestone 9, app/ai/) calls Gemini for tool-calling and explanations.
+    # "gemini-flash-latest" tracks Google's current default Flash model, so this doesn't need
+    # bumping as newer ones ship.
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-flash-latest"
+
     @property
     def database_url(self) -> str:
         return (
