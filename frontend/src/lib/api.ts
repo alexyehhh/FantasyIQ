@@ -245,6 +245,104 @@ export async function getPlayerSchedule(id: number): Promise<ScheduleEntry[] | n
   return res.json();
 }
 
+/**
+ * A player's line in the weekly top-scorers list: their actual result (not a projection) for
+ * the most recently finished NFL week, or for the NBA the most recent day of games.
+ */
+export interface TopScorerEntry extends PlayerSummary {
+  fantasy_points: number;
+  stats: Record<string, number>;
+  kicks?: Kick[];
+  /** Null for the NBA, which has no weeks. */
+  week: number | null;
+  game_date: string;
+  opponent: TeamSummary | null;
+  is_home: boolean | null;
+  team_score: number | null;
+  opponent_score: number | null;
+  result: "W" | "L" | "T" | null;
+}
+
+export interface TopScorersResponse {
+  items: TopScorerEntry[];
+  /** The NFL week these are for; null for the NBA. */
+  week: number | null;
+}
+
+/** The best actual fantasy scores in the most recently finished scoring period; empty before
+ * any games this season have finished. */
+export async function getTopScorers(sport: Sport, limit = 10): Promise<TopScorersResponse> {
+  const query = new URLSearchParams({ sport, limit: String(limit) });
+  return fetchJson(`/api/v1/players/top-scorers?${query.toString()}`, "list top scorers");
+}
+
+/** One player carrying an injury designation right now. */
+export interface InjuryReportEntry extends PlayerSummary {
+  injury: InjuryReport;
+}
+
+export interface InjuryReportResponse {
+  items: InjuryReportEntry[];
+}
+
+/** Players carrying an injury designation, most recently updated first. */
+export async function getInjuryReport(sport: Sport, limit = 10): Promise<InjuryReportResponse> {
+  const query = new URLSearchParams({ sport, limit: String(limit) });
+  return fetchJson(`/api/v1/players/injury-report?${query.toString()}`, "list the injury report");
+}
+
+/** One game on the scoreboard: both teams and the score so far, whatever its status. */
+export interface ScoreboardGame {
+  game_id: number;
+  start_time: string;
+  status: "scheduled" | "in_progress" | "final";
+  week: number | null;
+  home_team: TeamSummary;
+  away_team: TeamSummary;
+  home_score: number | null;
+  away_score: number | null;
+}
+
+export interface ScoreboardResponse {
+  /** The NFL week these games are for; null for the NBA. */
+  week: number | null;
+  games: ScoreboardGame[];
+}
+
+/** Every game in the current scoring period (an NFL week, or the NBA's next day of games),
+ * whatever its status — a scoreboard, not just finished results. */
+export async function getScoreboard(sport: Sport, week?: number): Promise<ScoreboardResponse> {
+  const query = new URLSearchParams({ sport });
+  if (week !== undefined) query.set("week", String(week));
+  return fetchJson(`/api/v1/scores?${query.toString()}`, "list the scoreboard");
+}
+
+/**
+ * One headline about a fantasy-relevant player, built from real synced data: either a
+ * standout stat line from a finished game, or a real reported injury update.
+ */
+export interface HeadlineEntry {
+  kind: "injury" | "performance";
+  player_id: number;
+  player_name: string;
+  sport: Sport;
+  team: TeamSummary | null;
+  position: string | null;
+  headshot_url: string | null;
+  headline: string;
+  at: string;
+}
+
+export interface HeadlinesResponse {
+  items: HeadlineEntry[];
+}
+
+/** Standout performances and real injury news for fantasy-relevant players, newest first. */
+export async function getHeadlines(sport: Sport, limit = 12): Promise<HeadlinesResponse> {
+  const query = new URLSearchParams({ sport, limit: String(limit) });
+  return fetchJson(`/api/v1/players/headlines?${query.toString()}`, "list the headlines");
+}
+
 /** An inclusive range of whole numbers worth `points`; a null end is open (0-19, 35+). */
 export interface Bracket {
   min: number | null;

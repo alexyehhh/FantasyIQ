@@ -8,10 +8,11 @@ DB directly.
 """
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Select, Subquery, and_, case, func, or_, select
+from sqlalchemy import ColumnElement, Select, Subquery, and_, case, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import (
@@ -22,6 +23,7 @@ from app.db.models import (
     PlayerGameStatsNFL,
     Team,
 )
+from app.services.projections.sleeper import et_date
 from app.services.scoring import (
     ScoringConfig,
     bracket_case,
@@ -71,8 +73,10 @@ def _stats_season(db: Session, sport: str) -> str | None:
     )
 
 
-def _season_points_subquery(config: ScoringConfig, season: str | None) -> Subquery:
-    """Each player's fantasy points summed over one season's games under `config`.
+def _points_subquery(
+    config: ScoringConfig, game_filter: Callable[[type[Game]], ColumnElement[bool]]
+) -> Subquery:
+    """Each player's fantasy points summed over the games `game_filter` selects, under `config`.
 
     Kickers' distance-scored field goals come from the per-kick table and are added to the
     points from their stat line."""
@@ -83,7 +87,7 @@ def _season_points_subquery(config: ScoringConfig, season: str | None) -> Subque
             func.sum(player_points_expression(config, model)).label("stat_points"),
         )
         .join(Game, model.game_id == Game.id)
-        .where(Game.season == season)
+        .where(game_filter(Game))
         .group_by(model.player_id)
         .subquery()
     )
@@ -101,7 +105,7 @@ def _season_points_subquery(config: ScoringConfig, season: str | None) -> Subque
             func.sum(kick_value).label("kick_points"),
         )
         .join(Game, FieldGoalKick.game_id == Game.id)
-        .where(Game.season == season)
+        .where(game_filter(Game))
         .group_by(FieldGoalKick.player_id)
         .subquery()
     )
@@ -115,6 +119,14 @@ def _season_points_subquery(config: ScoringConfig, season: str | None) -> Subque
         .outerjoin(kick_points, kick_points.c.player_id == stat_points.c.player_id)
         .subquery()
     )
+
+
+def _season_points_subquery(config: ScoringConfig, season: str | None) -> Subquery:
+    return _points_subquery(config, lambda g: g.season == season)
+
+
+def _period_points_subquery(config: ScoringConfig, game_ids: list[int]) -> Subquery:
+    return _points_subquery(config, lambda g: g.id.in_(game_ids))
 
 
 def _scoring_for(sport: str, scoring: ScoringConfig | None) -> ScoringConfig:
@@ -187,6 +199,24 @@ def get_player(db: Session, player_id: int) -> Player | None:
     return db.get(Player, player_id)
 
 
+def get_injury_report(
+    db: Session, *, sport: str, positions: list[str] | None = None, limit: int = 10
+) -> list[Player]:
+    """Players carrying an injury designation, most recently updated first (ties broken by
+    name); a report row with no `injury_updated_at` on record sorts last. `positions` narrows
+    it to those position codes (e.g. fantasy-relevant ones, leaving out linemen and the like)."""
+    query = select(Player).where(Player.sport == sport, Player.injury_status.is_not(None))
+    if positions:
+        query = query.where(Player.position.in_(positions))
+    return list(
+        db.scalars(
+            query.options(joinedload(Player.team))
+            .order_by(Player.injury_updated_at.desc().nullslast(), Player.name)
+            .limit(limit)
+        ).unique()
+    )
+
+
 @dataclass
 class Matchup:
     """A game seen from a player's (current) team: who they play, where, and the score."""
@@ -232,6 +262,66 @@ def _matchup(game: Game, team_id: int | None, teams: dict[int, Team]) -> Matchup
 def _teams_for(db: Session, games: list[Game]) -> dict[int, Team]:
     team_ids = {tid for game in games for tid in (game.home_team_id, game.away_team_id)}
     return {team.id: team for team in db.scalars(select(Team).where(Team.id.in_(team_ids)))}
+
+
+def _latest_period_games(db: Session, sport: str) -> tuple[int | None, list[int]]:
+    """The ids of the games in the most recently finished scoring period *of the season in
+    play*: an NFL week, or for the NBA (which has no weeks) the most recent US Eastern date
+    with a final game. Returns (week, game_ids); week is always None for the NBA.
+
+    Scoped to `get_current_season` so that, before this season's first result is in, this
+    doesn't reach back into a past season's games."""
+    season = get_current_season(db, sport)
+    if season is None:
+        return None, []
+
+    if sport == "NFL":
+        week = db.scalar(
+            select(Game.week)
+            .where(
+                Game.sport == sport,
+                Game.season == season,
+                Game.status == "final",
+                Game.week.is_not(None),
+            )
+            .order_by(Game.week.desc())
+            .limit(1)
+        )
+        if week is None:
+            return None, []
+        game_ids = list(
+            db.scalars(
+                select(Game.id).where(
+                    Game.sport == sport,
+                    Game.season == season,
+                    Game.status == "final",
+                    Game.week == week,
+                )
+            )
+        )
+        return week, game_ids
+
+    latest_start = db.scalar(
+        select(Game.start_time)
+        .where(Game.sport == sport, Game.season == season, Game.status == "final")
+        .order_by(Game.start_time.desc())
+        .limit(1)
+    )
+    if latest_start is None:
+        return None, []
+    day = et_date(latest_start)
+    # A US Eastern day spans 24h of naive-UTC start times; the latest game's start time is
+    # always inside that window, so looking one day back is always enough to cover it.
+    candidates = db.execute(
+        select(Game.id, Game.start_time).where(
+            Game.sport == sport,
+            Game.season == season,
+            Game.status == "final",
+            Game.start_time >= latest_start - timedelta(hours=24),
+        )
+    )
+    game_ids = [game_id for game_id, start in candidates if et_date(start) == day]
+    return None, game_ids
 
 
 def get_current_season(db: Session, sport: str, *, now: datetime | None = None) -> str | None:
@@ -313,6 +403,65 @@ def get_player_game_log(
 def game_fantasy_points(config: ScoringConfig, row: GameLogRow) -> float:
     """The player's fantasy points for one game of their log under `config`."""
     return score_player_game(config, serialize_stats_row(row.stats_row), row.kicks)
+
+
+@dataclass
+class TopScorer(GameLogRow):
+    """A player's line in a weekly top-scorers list: the matchup and stat line (from
+    GameLogRow) plus who scored it."""
+
+    player: Player = None
+
+
+def get_weekly_top_scorers(
+    db: Session, *, sport: str, scoring: ScoringConfig | None = None, limit: int = 10
+) -> tuple[list[TopScorer], int | None]:
+    """The best actual fantasy scores (not projections) in the most recently finished scoring
+    period: an NFL week, or for the NBA the most recent day of games, best first. Returns
+    (scorers, week); week is None for the NBA, which has none. Empty before any games this
+    season have finished."""
+    config = _scoring_for(sport, scoring)
+    week, game_ids = _latest_period_games(db, sport)
+    if not game_ids:
+        return [], week
+
+    model = _STATS_MODEL_BY_SPORT[sport]
+    points = _period_points_subquery(config, game_ids)
+    rows = list(
+        db.execute(
+            select(Player, model, Game, points.c.fantasy_points)
+            .join(model, model.player_id == Player.id)
+            .join(Game, model.game_id == Game.id)
+            .join(points, points.c.player_id == Player.id)
+            .where(model.game_id.in_(game_ids))
+            .options(joinedload(Player.team))
+            .order_by(points.c.fantasy_points.desc())
+            .limit(limit)
+        )
+        .unique()
+        .all()
+    )
+
+    teams = _teams_for(db, [game for _, _, game, _ in rows])
+    kicks_by_player: dict[int, list[tuple[int, str]]] = defaultdict(list)
+    if sport == "NFL" and rows:
+        kicks = db.scalars(
+            select(FieldGoalKick)
+            .where(FieldGoalKick.game_id.in_(game_ids))
+            .order_by(FieldGoalKick.external_play_id)
+        )
+        for kick in kicks:
+            kicks_by_player[kick.player_id].append((kick.distance, kick.result))
+
+    return [
+        TopScorer(
+            **vars(_matchup(game, player.team_id, teams)),
+            stats_row=stats_row,
+            kicks=kicks_by_player.get(player.id, []),
+            player=player,
+        )
+        for player, stats_row, game, _points in rows
+    ], week
 
 
 # Fantasy seasons end in week 17; ESPN's 18th NFL week isn't played for fantasy.

@@ -232,6 +232,124 @@ def test_get_player_has_no_injury_or_next_game_when_healthy_and_unscheduled(clie
     assert body["next_game"] is None
 
 
+def test_get_top_scorers_returns_the_latest_nfl_week_ranked_and_scored(client, db):
+    team = _make_team(db, sport="NFL", name="Mine", abbreviation="MNE")
+    rival = _make_team(db, sport="NFL", name="Rival", abbreviation="RIV")
+    player = _make_player(db, team, sport="NFL", name="Top Guy", position="RB")
+    game = Game(
+        sport="NFL", season="2026", week=3, home_team_id=team.id, away_team_id=rival.id,
+        start_time=datetime(2026, 9, 27, tzinfo=timezone.utc), status="final",
+        home_score=30, away_score=10,
+    )
+    db.add(game)
+    db.flush()
+    db.add(PlayerGameStatsNFL(
+        player_id=player.id, game_id=game.id, rushing_yards=150, rushing_touchdowns=2,
+    ))
+    db.flush()
+
+    response = client.get("/api/v1/players/top-scorers", params={"sport": "NFL"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["week"] == 3
+    (item,) = body["items"]
+    assert item["name"] == "Top Guy"
+    assert item["fantasy_points"] > 0
+    assert item["stats"]["rushing_yards"] == 150
+    assert item["opponent"]["abbreviation"] == "RIV"
+    assert item["is_home"] is True
+    assert item["result"] == "W"
+
+
+def test_get_top_scorers_requires_a_sport(client):
+    response = client.get("/api/v1/players/top-scorers")
+
+    assert response.status_code == 422
+
+
+def test_get_top_scorers_is_empty_without_finished_games(client):
+    response = client.get("/api/v1/players/top-scorers", params={"sport": "NBA"})
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "week": None}
+
+
+def test_get_injury_report_returns_flagged_players_with_full_detail(client, db):
+    team = _make_team(db, sport="NFL", name="Mine", abbreviation="MNE")
+    _make_player(db, team, sport="NFL", name="Healthy")
+    _make_player(
+        db, team, sport="NFL", name="Banged Up", position="RB",
+        injury_status="Questionable", injury_type="Ankle", injury_note="Limited in practice.",
+        injury_updated_at=datetime(2026, 9, 27, tzinfo=timezone.utc),
+    )
+
+    response = client.get("/api/v1/players/injury-report", params={"sport": "NFL"})
+
+    assert response.status_code == 200
+    (item,) = response.json()["items"]
+    assert item["name"] == "Banged Up"
+    assert item["team"]["abbreviation"] == "MNE"
+    assert item["injury"]["status"] == "Questionable"
+    assert item["injury"]["type"] == "Ankle"
+    assert item["injury"]["note"] == "Limited in practice."
+
+
+def test_get_injury_report_requires_a_sport(client):
+    response = client.get("/api/v1/players/injury-report")
+
+    assert response.status_code == 422
+
+
+def test_get_headlines_mixes_a_real_performance_and_a_real_injury(client, db):
+    team = _make_team(db, sport="NFL", name="Mine", abbreviation="MNE")
+    rival = _make_team(db, sport="NFL", name="Rival Cardinals", abbreviation="RIV")
+    scorer = _make_player(db, team, sport="NFL", name="Brock Purdy", position="QB")
+    game = Game(
+        sport="NFL", season="2026", week=3, home_team_id=team.id, away_team_id=rival.id,
+        start_time=datetime(2026, 9, 27, tzinfo=timezone.utc), status="final",
+        home_score=36, away_score=30,
+    )
+    db.add(game)
+    db.flush()
+    db.add(PlayerGameStatsNFL(
+        player_id=scorer.id, game_id=game.id, passing_yards=297, passing_touchdowns=4,
+    ))
+    hurt = _make_player(
+        db, team, sport="NFL", name="Hurt Player", position="WR", injury_status="Out",
+        injury_note="A specific and substantive real injury report about this player.",
+        injury_updated_at=datetime(2026, 9, 28, tzinfo=timezone.utc),
+    )
+    # a real season role, so the "negligible production" relevance filter doesn't drop them
+    earlier_game = Game(
+        sport="NFL", season="2026", week=1, home_team_id=team.id, away_team_id=rival.id,
+        start_time=datetime(2026, 9, 13, tzinfo=timezone.utc), status="final",
+    )
+    db.add(earlier_game)
+    db.flush()
+    db.add(PlayerGameStatsNFL(
+        player_id=hurt.id, game_id=earlier_game.id, receptions=6, receiving_yards=90,
+    ))
+    db.flush()
+
+    response = client.get("/api/v1/players/headlines", params={"sport": "NFL"})
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert {item["kind"] for item in items} == {"performance", "injury"}
+    performance = next(item for item in items if item["kind"] == "performance")
+    assert performance["player_name"] == "Brock Purdy"
+    assert "4 TD" in performance["headline"]
+    injury = next(item for item in items if item["kind"] == "injury")
+    assert injury["headline"] == "A specific and substantive real injury report about this player."
+
+
+def test_get_headlines_requires_a_sport(client):
+    response = client.get("/api/v1/players/headlines")
+
+    assert response.status_code == 422
+
+
 def test_get_player_stats_includes_opponent_and_result(client, db):
     team = _make_team(db, name="Mine", abbreviation="MNE")
     rival = _make_team(db, name="Rival", abbreviation="RIV")

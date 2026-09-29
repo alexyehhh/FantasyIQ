@@ -147,6 +147,54 @@ class RankedStat(BaseModel):
     tied: bool
 
 
+class TopScorerEntry(BaseModel):
+    """One player's line in the weekly top-scorers list: their actual result for the period
+    (an NFL week, or for the NBA the most recent day of games), not a projection."""
+
+    id: int
+    name: str
+    sport: str
+    team: TeamSummary | None
+    position: str | None
+    headshot_url: str | None
+    injury_status: str | None
+    fantasy_points: float
+    stats: dict[str, int | float]
+    kicks: list[KickEntry] = []
+    week: int | None = None
+    game_date: UTCDatetime
+    opponent: TeamSummary | None = None
+    is_home: bool | None = None
+    team_score: int | None = None
+    opponent_score: int | None = None
+    result: str | None = None  # "W" | "L" | "T"
+
+
+class InjuryReportEntry(BaseModel):
+    """One player carrying an injury designation right now."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    sport: str
+    team: TeamSummary | None
+    position: str | None
+    headshot_url: str | None
+    injury: InjuryReport
+
+
+class InjuryReportResponse(BaseModel):
+    items: list[InjuryReportEntry]
+
+
+class TopScorersResponse(BaseModel):
+    """`week` is the NFL week these are for, or None for the NBA (which has no weeks)."""
+
+    items: list[TopScorerEntry]
+    week: int | None
+
+
 class SeasonSummary(BaseModel):
     """A player's (or defense's) totals for the latest season with stats, each ranked among
     `pool_size` players in `position_group`. `stats` has every stat column plus

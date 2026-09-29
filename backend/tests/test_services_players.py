@@ -458,16 +458,18 @@ def test_schedule_is_empty_for_a_player_without_a_team_or_games(db):
     assert players_service.get_player_schedule(db, _make_player(db, me)) == []
 
 
-def _stat_line(db, player, when, *, season="2026", **stats):
+def _stat_line(db, player, when, *, season="2026", week=None, opponent=None, **stats):
+    away = opponent.id if opponent else player.team_id
     game = Game(
         sport=player.sport, season=season, home_team_id=player.team_id,
-        away_team_id=player.team_id, start_time=when, status="final",
+        away_team_id=away, start_time=when, status="final", week=week,
     )
     db.add(game)
     db.flush()
     model = PlayerGameStatsNFL if player.sport == "NFL" else PlayerGameStats
     db.add(model(player_id=player.id, game_id=game.id, **stats))
     db.flush()
+    return game
 
 
 def test_list_players_sorts_by_season_fantasy_points_most_first(db):
@@ -559,3 +561,116 @@ def test_sorting_by_fantasy_points_needs_a_sport(db):
 
 def test_season_points_are_empty_for_no_players(db):
     assert players_service.get_season_fantasy_points(db, []) == {}
+
+
+def test_weekly_top_scorers_ranks_the_latest_nfl_week_best_first(db):
+    team = _make_team(db, sport="NFL")
+    low = _make_player(db, team, sport="NFL", name="Low", position="WR")
+    high = _make_player(db, team, sport="NFL", name="High", position="RB")
+    _stat_line(db, low, datetime(2026, 9, 13), week=1, receptions=1, receiving_yards=10)   # wk1: 2
+    _stat_line(db, high, datetime(2026, 9, 13), week=1, rushing_yards=200)                 # wk1: 20
+    _stat_line(db, low, datetime(2026, 9, 20), week=2, receptions=8, receiving_yards=120)  # wk2: 20
+    _stat_line(db, high, datetime(2026, 9, 20), week=2, rushing_yards=10)                  # wk2: 1
+
+    scorers, week = players_service.get_weekly_top_scorers(db, sport="NFL")
+
+    assert week == 2
+    assert [s.player.name for s in scorers] == ["Low", "High"]
+
+
+def test_weekly_top_scorers_ignores_an_earlier_season(db):
+    team = _make_team(db, sport="NFL")
+    veteran = _make_player(db, team, sport="NFL", name="Last Year", position="WR")
+    rookie = _make_player(db, team, sport="NFL", name="This Year", position="WR")
+    _stat_line(db, veteran, datetime(2025, 9, 7), season="2025", week=17,
+               receptions=10, receiving_yards=200)
+    _stat_line(db, rookie, datetime(2026, 9, 13), season="2026", week=1,
+               receptions=1, receiving_yards=10)
+
+    scorers, week = players_service.get_weekly_top_scorers(db, sport="NFL")
+
+    assert week == 1
+    assert [s.player.name for s in scorers] == ["This Year"]
+
+
+def test_weekly_top_scorers_reports_the_matchup_and_result(db):
+    team = _make_team(db, sport="NFL", name="Mine", abbreviation="MNE")
+    rival = _make_team(db, sport="NFL", name="Rival", abbreviation="RIV")
+    player = _make_player(db, team, sport="NFL", name="Winner", position="RB")
+    game = _stat_line(db, player, datetime(2026, 9, 13), week=1, opponent=rival,
+                       rushing_yards=150, rushing_touchdowns=2)
+    game.home_score, game.away_score = 30, 10
+    db.flush()
+
+    (scorer,), _week = players_service.get_weekly_top_scorers(db, sport="NFL")
+
+    assert scorer.opponent.abbreviation == "RIV"
+    assert scorer.is_home is True
+    assert scorer.result == "W"
+
+
+def test_weekly_top_scorers_respects_limit(db):
+    team = _make_team(db, sport="NFL")
+    for i in range(3):
+        player = _make_player(db, team, sport="NFL", name=f"Player {i}", position="WR")
+        _stat_line(db, player, datetime(2026, 9, 13), week=1, receptions=i + 1)
+
+    scorers, _week = players_service.get_weekly_top_scorers(db, sport="NFL", limit=2)
+
+    assert len(scorers) == 2
+
+
+def test_weekly_top_scorers_is_empty_before_any_game_has_finished(db):
+    scorers, week = players_service.get_weekly_top_scorers(db, sport="NFL")
+
+    assert scorers == []
+    assert week is None
+
+
+def test_weekly_top_scorers_nba_has_no_week_and_uses_the_latest_day(db):
+    team = _make_team(db, sport="NBA")
+    earlier = _make_player(db, team, name="Earlier Day")
+    later = _make_player(db, team, name="Later Day")
+    _stat_line(db, earlier, datetime(2026, 1, 1, 0, 30), season="2025-26", points=50)
+    _stat_line(db, later, datetime(2026, 1, 2, 0, 30), season="2025-26", points=10)
+
+    scorers, week = players_service.get_weekly_top_scorers(db, sport="NBA")
+
+    assert week is None
+    assert [s.player.name for s in scorers] == ["Later Day"]
+
+
+def test_injury_report_lists_only_players_with_a_designation_most_recent_first(db):
+    team = _make_team(db, sport="NFL")
+    healthy = _make_player(db, team, sport="NFL", name="Healthy")
+    _make_player(
+        db, team, sport="NFL", name="Older News", injury_status="Questionable",
+        injury_updated_at=datetime(2026, 9, 20),
+    )
+    _make_player(
+        db, team, sport="NFL", name="Fresh News", injury_status="Out",
+        injury_updated_at=datetime(2026, 9, 27),
+    )
+    db.flush()
+
+    report = players_service.get_injury_report(db, sport="NFL")
+
+    names = [p.name for p in report]
+    assert names == ["Fresh News", "Older News"]
+    assert healthy.name not in names
+
+
+def test_injury_report_respects_limit_and_sport(db):
+    nfl_team = _make_team(db, sport="NFL")
+    nba_team = _make_team(db, sport="NBA")
+    for i in range(3):
+        _make_player(
+            db, nfl_team, sport="NFL", name=f"Hurt {i}", injury_status="Out",
+            injury_updated_at=datetime(2026, 9, 20 + i),
+        )
+    _make_player(db, nba_team, sport="NBA", name="Hurt Hooper", injury_status="Out")
+
+    report = players_service.get_injury_report(db, sport="NFL", limit=2)
+
+    assert len(report) == 2
+    assert all(p.sport == "NFL" for p in report)

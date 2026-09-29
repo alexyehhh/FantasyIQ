@@ -53,3 +53,28 @@
     }
   }
 }
+
+/*
+ * The home page's dashboard grid: a full-bleed layout with matchups spanning the left column's
+ * full height beside top scorers and scores stacked on the right, and start/sit beside news
+ * along the bottom. Named areas (rather than Tailwind's grid utilities) because the two columns
+ * need independently placed, unevenly sized cells. Below `lg` it's a single stacked column.
+ */
+@layer components {
+  .home-grid {
+    display: flex;
+    flex-direction: column;
+  }
+
+  @media (min-width: 1024px) {
+    .home-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto auto auto;
+      grid-template-areas:
+        "matchups topscorers"
+        "matchups scores"
+        "startsit news";
+    }
+  }
+}

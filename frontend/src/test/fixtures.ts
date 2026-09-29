@@ -10,6 +10,7 @@ import type {
   ScoringConfig,
   SeasonSummary,
   TeamSummary,
+  TopScorerEntry,
 } from "@/lib/api";
 
 export function makeTeam(overrides: Partial<TeamSummary> = {}): TeamSummary {
@@ -218,6 +219,29 @@ export function makeSeasonSummary(overrides: Partial<SeasonSummary> = {}): Seaso
       interceptions: { total: 1, rank: 12, tied: false },
       rushing_yards: { total: 40, rank: 7, tied: false },
     },
+    ...overrides,
+  };
+}
+
+export function makeTopScorerEntry(overrides: Partial<TopScorerEntry> = {}): TopScorerEntry {
+  return {
+    ...makePlayerSummary({
+      id: 1,
+      name: "Jahmyr Gibbs",
+      sport: "NFL",
+      position: "RB",
+      team: makeTeam({ id: 8, name: "Detroit Lions", abbreviation: "DET" }),
+    }),
+    fantasy_points: 41.4,
+    stats: { rushing_yards: 99, rushing_touchdowns: 2, receptions: 7, receiving_yards: 65 },
+    kicks: [],
+    week: 3,
+    game_date: "2026-09-27T17:00:00Z",
+    opponent: makeTeam({ id: 9, name: "New York Jets", abbreviation: "NYJ" }),
+    is_home: true,
+    team_score: 31,
+    opponent_score: 24,
+    result: "W",
     ...overrides,
   };
 }

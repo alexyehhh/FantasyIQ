@@ -13,7 +13,7 @@ export default function NavBar() {
 
   return (
     <header className="border-b border-white/10 bg-nav text-white">
-      <div className="mx-auto flex h-14 max-w-[1120px] items-center gap-7 px-4">
+      <div className="flex h-14 w-full items-center gap-7 px-4 sm:px-6">
         <Link
           href="/"
           aria-label="FantasyIQ home"
@@ -26,7 +26,7 @@ export default function NavBar() {
             Fantasy<span className="text-[#c9b8ff]">IQ</span>
           </span>
         </Link>
-        <nav aria-label="Primary" className="flex h-full">
+        <nav aria-label="Primary" className="ml-auto flex h-full">
           {LINKS.map((link) => {
             const active = pathname === link.href || pathname.startsWith(`${link.href}/`);
             return (
@@ -45,6 +45,28 @@ export default function NavBar() {
             );
           })}
         </nav>
+        <button
+          type="button"
+          disabled
+          aria-label="Profile (coming soon)"
+          title="Coming soon"
+          className="grid h-9 w-9 flex-none cursor-not-allowed place-items-center rounded-full bg-white/10 text-[#b9b0da] opacity-60"
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8" />
+          </svg>
+        </button>
       </div>
     </header>
   );

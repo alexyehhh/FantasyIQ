@@ -1,41 +1,27 @@
-import Link from "next/link";
-import { getHealth } from "@/lib/api";
+import MatchupPlaceholder from "@/components/home/MatchupPlaceholder";
+import NewsList from "@/components/home/NewsList";
+import ScoresStrip from "@/components/home/ScoresStrip";
+import StartSitBox from "@/components/home/StartSitBox";
+import TopScorersList from "@/components/home/TopScorersList";
 
-export default async function HomePage() {
-  let status: string;
-  let environment: string;
-  let error: string | null = null;
-
-  try {
-    const health = await getHealth();
-    status = health.status;
-    environment = health.environment;
-  } catch {
-    status = "unreachable";
-    environment = "unknown";
-    error = "Could not reach the backend. Is it running?";
-  }
-
-  const isOk = status === "ok";
-
+export default function HomePage() {
   return (
-    <main className="flex min-h-[calc(100vh-56px)] flex-col items-center justify-center gap-4 p-8">
-      <h1 className="font-display text-5xl font-bold uppercase tracking-wide">FantasyIQ</h1>
-      <div className="flex items-center gap-2">
-        <span
-          className={`inline-block h-3 w-3 rounded-full ${isOk ? "bg-good" : "bg-bad"}`}
-        />
-        <span>
-          Backend status: <strong>{status}</strong> ({environment})
-        </span>
+    <main className="home-grid min-h-[calc(100vh-56px)] w-full">
+      <div className="border-b border-line px-4 py-6 sm:px-8 lg:border-b lg:border-r lg:[grid-area:matchups]">
+        <MatchupPlaceholder />
       </div>
-      {error && <p className="text-sm text-bad">{error}</p>}
-      <Link href="/players" className="font-semibold text-accent hover:underline">
-        Browse players &rarr;
-      </Link>
-      <Link href="/start" className="font-semibold text-accent hover:underline">
-        Who should I start? &rarr;
-      </Link>
+      <div className="border-b border-line px-4 py-6 sm:px-8 lg:[grid-area:topscorers]">
+        <TopScorersList />
+      </div>
+      <div className="border-b border-line px-4 py-6 sm:px-8 lg:[grid-area:scores]">
+        <ScoresStrip />
+      </div>
+      <div className="border-b border-line px-4 py-6 sm:px-8 lg:border-b-0 lg:border-r lg:[grid-area:startsit]">
+        <StartSitBox />
+      </div>
+      <div className="px-4 py-6 sm:px-8 lg:[grid-area:news]">
+        <NewsList />
+      </div>
     </main>
   );
 }

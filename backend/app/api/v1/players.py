@@ -12,8 +12,11 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.scoring_param import SCORING_PARAM_DESCRIPTION, scoring_or_422
 from app.db.session import get_db
+from app.schemas.headlines import HeadlineEntry, HeadlinesResponse
 from app.schemas.players import (
     InjuryReport,
+    InjuryReportEntry,
+    InjuryReportResponse,
     KickEntry,
     NextGame,
     PlayerDetail,
@@ -23,7 +26,10 @@ from app.schemas.players import (
     ScheduleEntry,
     SeasonSummary,
     TeamSummary,
+    TopScorerEntry,
+    TopScorersResponse,
 )
+from app.services import headlines as headlines_service
 from app.services import players as players_service
 from app.services import season_summary as season_summary_service
 
@@ -72,6 +78,101 @@ def list_players(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/top-scorers", response_model=TopScorersResponse)
+def get_top_scorers(
+    sport: Literal["NBA", "NFL"],
+    limit: int = Query(default=10, ge=1, le=25),
+    scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
+    db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
+) -> TopScorersResponse:
+    """The best actual fantasy scores (not projections) in the most recently finished scoring
+    period: an NFL week, or for the NBA the most recent day of games. Empty before any games
+    this season have finished."""
+    config = scoring_or_422(scoring, sport)
+    scorers, week = players_service.get_weekly_top_scorers(
+        db, sport=sport, scoring=config, limit=limit
+    )
+    items = [
+        TopScorerEntry(
+            id=scorer.player.id,
+            name=scorer.player.name,
+            sport=scorer.player.sport,
+            team=TeamSummary.model_validate(scorer.player.team) if scorer.player.team else None,
+            position=scorer.player.position,
+            headshot_url=scorer.player.headshot_url,
+            injury_status=scorer.player.injury_status,
+            fantasy_points=round(players_service.game_fantasy_points(config, scorer), 1),
+            stats=players_service.serialize_stats_row(scorer.stats_row),
+            kicks=[KickEntry(distance=d, result=r) for d, r in scorer.kicks],
+            week=week,
+            game_date=scorer.game.start_time,
+            opponent=TeamSummary.model_validate(scorer.opponent) if scorer.opponent else None,
+            is_home=scorer.is_home,
+            team_score=scorer.team_score,
+            opponent_score=scorer.opponent_score,
+            result=scorer.result,
+        )
+        for scorer in scorers
+    ]
+    return TopScorersResponse(items=items, week=week)
+
+
+@router.get("/injury-report", response_model=InjuryReportResponse)
+def get_injury_report(
+    sport: Literal["NBA", "NFL"],
+    limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
+) -> InjuryReportResponse:
+    """Players carrying an injury designation right now, most recently updated first."""
+    players = players_service.get_injury_report(db, sport=sport, limit=limit)
+    items = [
+        InjuryReportEntry(
+            id=player.id,
+            name=player.name,
+            sport=player.sport,
+            team=TeamSummary.model_validate(player.team) if player.team else None,
+            position=player.position,
+            headshot_url=player.headshot_url,
+            injury=InjuryReport(
+                status=player.injury_status,
+                type=player.injury_type,
+                note=player.injury_note,
+                updated_at=player.injury_updated_at,
+            ),
+        )
+        for player in players
+    ]
+    return InjuryReportResponse(items=items)
+
+
+@router.get("/headlines", response_model=HeadlinesResponse)
+def get_headlines(
+    sport: Literal["NBA", "NFL"],
+    limit: int = Query(default=12, ge=1, le=30),
+    scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
+    db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
+) -> HeadlinesResponse:
+    """Standout performances and real injury news for fantasy-relevant players, newest first —
+    built from stats and injury reports already on file, not generated or guessed."""
+    config = scoring_or_422(scoring, sport)
+    headlines = headlines_service.get_headlines(db, sport=sport, scoring=config, limit=limit)
+    items = [
+        HeadlineEntry(
+            kind=h.kind,
+            player_id=h.player.id,
+            player_name=h.player.name,
+            sport=h.player.sport,
+            team=TeamSummary.model_validate(h.player.team) if h.player.team else None,
+            position=h.player.position,
+            headshot_url=h.player.headshot_url,
+            headline=h.text,
+            at=h.at,
+        )
+        for h in headlines
+    ]
+    return HeadlinesResponse(items=items)
 
 
 @router.get("/{player_id}", response_model=PlayerDetail)
