@@ -6,7 +6,8 @@ import {
   NEGATIVE_STATS,
   STAT_LABELS,
   NBA_LOG_COLUMNS,
-  NFL_LOG_COLUMNS,
+  NFL_QB_LOG_COLUMNS,
+  NFL_SKILL_LOG_COLUMNS,
   average,
   formatKicks,
   formatStat,
@@ -16,18 +17,12 @@ import {
 
 describe("profileFor", () => {
   it("uses one profile for every NBA position", () => {
-    expect(profileFor("NBA", "G").defaultStat).toBe("points");
+    expect(profileFor("NBA", "G").defaultStat).toBe(FPTS);
     expect(profileFor("NBA", null)).toBe(profileFor("NBA", "C"));
   });
 
-  it.each([
-    ["QB", "passing_yards"],
-    ["RB", "rushing_yards"],
-    ["FB", "rushing_yards"],
-    ["WR", "receiving_yards"],
-    ["TE", "receiving_yards"],
-  ])("defaults %s to %s", (position, stat) => {
-    expect(profileFor("NFL", position).defaultStat).toBe(stat);
+  it.each(["QB", "RB", "FB", "WR", "TE"])("defaults %s to fantasy points", (position) => {
+    expect(profileFor("NFL", position).defaultStat).toBe(FPTS);
   });
 
   it("falls back to a generic profile for positions the stored stats don't describe", () => {
@@ -93,9 +88,24 @@ describe("profileFor", () => {
         expect(STAT_LABELS[column.key]).toBeDefined();
       }
     }
-    for (const column of [...NBA_LOG_COLUMNS, ...NFL_LOG_COLUMNS]) {
+    for (const column of [...NBA_LOG_COLUMNS, ...NFL_QB_LOG_COLUMNS, ...NFL_SKILL_LOG_COLUMNS]) {
       expect(STAT_LABELS[column.key]).toBeDefined();
     }
+  });
+
+  it("leads every game log with fantasy points", () => {
+    for (const columns of [NBA_LOG_COLUMNS, NFL_QB_LOG_COLUMNS, NFL_SKILL_LOG_COLUMNS]) {
+      expect(columns[0].key).toBe(FPTS);
+    }
+  });
+
+  it("pushes passing to the far right for positions that rarely throw", () => {
+    for (const position of ["RB", "WR", "TE"]) {
+      const columns = profileFor("NFL", position).logColumns;
+      expect(columns[columns.length - 1].group).toBe("Passing");
+    }
+    const qbColumns = profileFor("NFL", "QB").logColumns;
+    expect(qbColumns[1].group).toBe("Passing");
   });
 });
 

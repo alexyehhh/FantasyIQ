@@ -65,6 +65,7 @@ export interface LogColumn {
 }
 
 export const NBA_LOG_COLUMNS: LogColumn[] = [
+  FPTS,
   "minutes",
   "points",
   "rebounds",
@@ -74,10 +75,11 @@ export const NBA_LOG_COLUMNS: LogColumn[] = [
   "turnovers",
   "field_goal_attempts",
   "three_point_attempts",
-  FPTS,
 ].map((key) => ({ key }));
 
-export const NFL_LOG_COLUMNS: LogColumn[] = [
+/** QBs throw far more than they run or catch, so passing leads the other groups. */
+export const NFL_QB_LOG_COLUMNS: LogColumn[] = [
+  { key: FPTS },
   { key: "passing_completions", group: "Passing" },
   { key: "passing_attempts", group: "Passing" },
   { key: "passing_yards", group: "Passing" },
@@ -91,19 +93,37 @@ export const NFL_LOG_COLUMNS: LogColumn[] = [
   { key: "receiving_yards", group: "Receiving" },
   { key: "receiving_touchdowns", group: "Receiving" },
   { key: "fumbles_lost", group: "Misc" },
-  { key: FPTS, group: "Misc" },
+];
+
+/** RB/WR/TE/OTHER almost never throw, so passing is pushed to the far right. */
+export const NFL_SKILL_LOG_COLUMNS: LogColumn[] = [
+  { key: FPTS },
+  { key: "rushing_attempts", group: "Rushing" },
+  { key: "rushing_yards", group: "Rushing" },
+  { key: "rushing_touchdowns", group: "Rushing" },
+  { key: "receptions", group: "Receiving" },
+  { key: "receiving_targets", group: "Receiving" },
+  { key: "receiving_yards", group: "Receiving" },
+  { key: "receiving_touchdowns", group: "Receiving" },
+  { key: "fumbles_lost", group: "Misc" },
+  { key: "passing_completions", group: "Passing" },
+  { key: "passing_attempts", group: "Passing" },
+  { key: "passing_yards", group: "Passing" },
+  { key: "passing_touchdowns", group: "Passing" },
+  { key: "interceptions", group: "Passing" },
 ];
 
 const KICKER_LOG_COLUMNS: LogColumn[] = [
+  { key: FPTS },
   { key: "field_goals_made", group: "Field goals" },
   { key: "field_goal_attempts", group: "Field goals" },
   { key: KICKS, group: "Field goals" },
   { key: "extra_points_made", group: "Extra points" },
   { key: "extra_point_attempts", group: "Extra points" },
-  { key: FPTS, group: "Misc" },
 ];
 
 const DEFENSE_LOG_COLUMNS: LogColumn[] = [
+  { key: FPTS },
   { key: "sacks", group: "Takeaways" },
   { key: "interceptions", group: "Takeaways" },
   { key: "fumble_recoveries", group: "Takeaways" },
@@ -114,7 +134,6 @@ const DEFENSE_LOG_COLUMNS: LogColumn[] = [
   { key: "fourth_down_stops", group: "Allowed" },
   { key: "points_allowed", group: "Allowed" },
   { key: "yards_allowed", group: "Allowed" },
-  { key: FPTS, group: "Misc" },
 ];
 
 export interface StatProfile {
@@ -139,15 +158,14 @@ const NBA_PROFILE: StatProfile = {
   tracked: true,
   tiles: ["points", "rebounds", "assists", "minutes"],
   rows: [FPTS, "minutes", "points", "rebounds", "assists", "steals", "blocks", "turnovers"],
-  defaultStat: "points",
+  defaultStat: FPTS,
   logColumns: NBA_LOG_COLUMNS,
   negativeStats: NEGATIVE_STATS,
   scoringKind: "player",
 };
 
-const NFL_PLAYER: Pick<StatProfile, "tracked" | "logColumns" | "negativeStats" | "scoringKind"> = {
+const NFL_PLAYER: Pick<StatProfile, "tracked" | "negativeStats" | "scoringKind"> = {
   tracked: true,
-  logColumns: NFL_LOG_COLUMNS,
   negativeStats: NEGATIVE_STATS,
   scoringKind: "player",
 };
@@ -165,7 +183,8 @@ const NFL_PROFILES: Record<string, StatProfile> = {
       "interceptions",
       "rushing_yards",
     ],
-    defaultStat: "passing_yards",
+    defaultStat: FPTS,
+    logColumns: NFL_QB_LOG_COLUMNS,
   },
   RB: {
     ...NFL_PLAYER,
@@ -178,7 +197,8 @@ const NFL_PROFILES: Record<string, StatProfile> = {
       "receptions",
       "receiving_yards",
     ],
-    defaultStat: "rushing_yards",
+    defaultStat: FPTS,
+    logColumns: NFL_SKILL_LOG_COLUMNS,
   },
   RECEIVER: {
     ...NFL_PLAYER,
@@ -191,7 +211,8 @@ const NFL_PROFILES: Record<string, StatProfile> = {
       "receiving_touchdowns",
       "rushing_yards",
     ],
-    defaultStat: "receiving_yards",
+    defaultStat: FPTS,
+    logColumns: NFL_SKILL_LOG_COLUMNS,
   },
   KICKER: {
     tracked: true,
@@ -224,7 +245,8 @@ const NFL_PROFILES: Record<string, StatProfile> = {
     ...NFL_PLAYER,
     tiles: ["passing_yards", "rushing_yards", "receptions", "receiving_yards"],
     rows: [FPTS, "passing_yards", "rushing_yards", "receptions", "receiving_yards"],
-    defaultStat: "receiving_yards",
+    defaultStat: FPTS,
+    logColumns: NFL_SKILL_LOG_COLUMNS,
   },
   // A team defense (D/ST), addressed on the defense pages as position "DEF".
   DEF: {

@@ -140,11 +140,11 @@ describe("PlayerStats", () => {
   });
 
   it.each([
-    ["NBA", "G", "Points"],
-    ["NFL", "QB", "Passing yards"],
-    ["NFL", "RB", "Rushing yards"],
-    ["NFL", "WR", "Receiving yards"],
-  ] as const)("charts %s %s by %s to start", (sport, position, chip) => {
+    ["NBA", "G"],
+    ["NFL", "QB"],
+    ["NFL", "RB"],
+    ["NFL", "WR"],
+  ] as const)("charts %s %s by fantasy points to start", (sport, position) => {
     renderStats({
       sport,
       position,
@@ -153,20 +153,20 @@ describe("PlayerStats", () => {
       ],
     });
 
-    expect(screen.getByRole("button", { name: chip })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Fantasy pts" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("makes the chart, averages and game log all follow the chosen stat", async () => {
     renderStats();
     const averages = screen.getByLabelText("Averages");
     const log = screen.getByLabelText("Game log");
-    expect(within(averages).getByRole("row", { name: /^PTS/ })).toHaveClass("bg-accent-soft");
+    expect(within(averages).getByRole("row", { name: /^FPTS/ })).toHaveClass("bg-accent-soft");
 
     await userEvent.setup().click(screen.getByRole("button", { name: "Rebounds" }));
 
     expect(screen.getByRole("button", { name: "Rebounds" })).toHaveAttribute("aria-pressed", "true");
     expect(within(averages).getByRole("row", { name: /^REB/ })).toHaveClass("bg-accent-soft");
-    expect(within(averages).getByRole("row", { name: /^PTS/ })).not.toHaveClass("bg-accent-soft");
+    expect(within(averages).getByRole("row", { name: /^FPTS/ })).not.toHaveClass("bg-accent-soft");
     expect(within(log).getByRole("columnheader", { name: "REB" })).toHaveClass("bg-accent-soft");
     expect(screen.getByLabelText("Consistency")).toHaveTextContent("Rebounds · 12 games");
   });

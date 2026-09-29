@@ -134,11 +134,12 @@ describe("GameLog", () => {
     expect(screen.getByRole("cell", { name: "12" })).not.toHaveClass("text-accent");
   });
 
-  it("shows fantasy points as the last column", () => {
+  it("shows fantasy points as the first stat column, right after the result", () => {
     const entries = [makeEntry({ stats: { points: 10, assists: 2 }, fantasy_points: 13 })];
     render(<GameLog sport="NBA" rows={rowsFor(entries)} selectedStat="points" />);
 
-    expect(screen.getByRole("columnheader", { name: "FPTS" })).toBeInTheDocument();
+    const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
+    expect(headers.slice(0, 4)).toEqual(["Date", "Opp", "Result", "FPTS"]);
     expect(screen.getByRole("cell", { name: "13" })).toHaveClass("font-bold");
   });
 
@@ -152,6 +153,19 @@ describe("GameLog", () => {
     expect(screen.getByText("Wk 3")).toBeInTheDocument();
     expect(screen.getAllByText("–").length).toBeGreaterThan(5);
     expect(screen.getByRole("cell", { name: "61" })).toHaveClass("text-accent");
+  });
+
+  it("leads with fantasy points and pushes passing to the far right for a skill position", () => {
+    const entries = [makeEntry({ week: 3, stats: { receptions: 5, receiving_yards: 61 } })];
+    render(<GameLog sport="NFL" rows={rowsFor(entries)} selectedStat="receiving_yards" />);
+
+    // The header's second row holds one abbreviation per stat column, in column order.
+    const headerRows = screen.getByRole("table").querySelectorAll("thead tr");
+    const abbrs = Array.from(headerRows[headerRows.length - 1].querySelectorAll("th")).map(
+      (th) => th.textContent,
+    );
+    expect(abbrs[0]).toBe("FPTS");
+    expect(abbrs.slice(-5)).toEqual(["CMP", "ATT", "YDS", "TD", "INT"]);
   });
 
   it("shows the bye week between the weeks either side of it", () => {

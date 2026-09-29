@@ -8,7 +8,7 @@ import {
   FPTS,
   KICKS,
   NBA_LOG_COLUMNS,
-  NFL_LOG_COLUMNS,
+  NFL_SKILL_LOG_COLUMNS,
   STAT_LABELS,
   formatKicks,
   formatStat,
@@ -75,16 +75,21 @@ export default function GameLog({
     setWindow([from, to]);
     section.current?.scrollIntoView({ block: "start" });
   };
-  const defaultColumns = sport === "NBA" ? NBA_LOG_COLUMNS : NFL_LOG_COLUMNS;
+  const defaultColumns = sport === "NBA" ? NBA_LOG_COLUMNS : NFL_SKILL_LOG_COLUMNS;
   const columns = !showStats ? [] : (columnsProp ?? defaultColumns);
   const lowerIsBetter = negativeStats?.has(selectedStat) ?? false;
+  // Every column needs a slot in the group header row once any column has a group, even one
+  // (like FPTS) with none, or the two header rows fall out of alignment with each other.
+  const grouped = columns.some((column) => column.group);
   const groups: { name: string; span: number }[] = [];
-  for (const column of columns) {
-    const last = groups[groups.length - 1];
-    if (column.group && last?.name === column.group) last.span += 1;
-    else if (column.group) groups.push({ name: column.group, span: 1 });
+  if (grouped) {
+    for (const column of columns) {
+      const name = column.group ?? "";
+      const last = groups[groups.length - 1];
+      if (last?.name === name) last.span += 1;
+      else groups.push({ name, span: 1 });
+    }
   }
-  const grouped = groups.length > 0;
   const played = rows.filter((row) => row.kind === "played").length;
   const live = rows.filter((row) => row.status === "in_progress").length;
   const upcoming = rows.filter((row) => row.kind === "upcoming").length - live;
