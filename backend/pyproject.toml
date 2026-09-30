@@ -21,6 +21,13 @@ dev = [
     "ruff>=0.6.9",
     "mypy>=1.11.0",
 ]
+# Our own projection model (app/ml): training and serving both need these.
+ml = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "joblib>=1.4",
+]
 
 [tool.setuptools]
 packages = ["app", "data_pipeline"]

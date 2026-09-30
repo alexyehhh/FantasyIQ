@@ -5,7 +5,7 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY app ./app
 COPY data_pipeline ./data_pipeline
-RUN pip install --no-cache-dir -e ".[dev]"
+RUN pip install --no-cache-dir -e ".[dev,ml]"
 
 COPY . .
 
