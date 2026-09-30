@@ -85,7 +85,7 @@ export default function AccuracyPage() {
       <p className="mt-1 max-w-2xl text-sm text-ink-2">
         How close each source&apos;s projections came to what actually happened. Projections are
         saved before kickoff, so a source can&apos;t have seen the result, and sources are compared
-        only on the players every one of them projected.
+        only on the players and defenses every one of them projected.
       </p>
 
       <div className="mt-5 flex flex-wrap items-end gap-x-6 gap-y-3" aria-label="Filters" role="group">

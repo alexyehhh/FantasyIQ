@@ -4,7 +4,14 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from app.db.models import Game, Player, PlayerGameStatsNFL, ProjectionSnapshot, Team
+from app.db.models import (
+    Game,
+    Player,
+    PlayerGameStatsNFL,
+    ProjectionSnapshot,
+    Team,
+    TeamGameStatsNFL,
+)
 from app.db.session import SessionLocal
 from app.services import accuracy
 from app.services.scoring import default_config
@@ -229,3 +236,65 @@ def test_spearman_is_one_for_the_same_order_and_minus_one_for_the_reverse():
     assert accuracy._spearman(values, values[::-1]) == pytest.approx(-1.0)
     assert accuracy._spearman(values[:5], values[:5]) is None  # too short to mean anything
     assert accuracy._spearman(values, [1.0] * 12) is None  # no spread at all
+
+
+def _defense_game(db, league, game, allowed, sacks):
+    for team in league:
+        db.add(
+            TeamGameStatsNFL(team_id=team.id, game_id=game.id, points_allowed=allowed, sacks=sacks)
+        )
+    db.flush()
+
+
+def _project_defense(db, source, team, game, stats):
+    db.add(
+        ProjectionSnapshot(
+            source=source, sport="NFL", kind="defense", entity_id=team.id, game_id=game.id,
+            origin="live", captured_at=game.start_time - timedelta(hours=3), stats=stats,
+        )
+    )  # fmt: skip
+    db.flush()
+
+
+def test_team_defenses_are_scored_against_their_real_box_score(db, league):
+    game = _game(db, league)
+    alpha = league[0]
+    # Alpha allowed 10 (the 7-13 bracket: 4 points) and had 3 sacks: 7.0 points in all.
+    _defense_game(db, league, game, allowed=10, sacks=3)
+    _project_defense(db, "a", alpha, game, {"sacks": 3.0, "points_allowed": 10.0})
+    _project_defense(db, "b", alpha, game, {"sacks": 1.0, "points_allowed": 10.0})
+
+    report = _run(db)
+
+    (row,) = report.by_position
+    assert row.position == "DEF" and report.compared == 1
+    # b projected 2 sacks fewer (a point each) on an otherwise identical line.
+    assert report.overall["a"].bias - report.overall["b"].bias == pytest.approx(2.0)
+    assert report.overall["a"].mean_actual == pytest.approx(7.0)
+
+
+def test_defenses_are_their_own_position_and_not_mixed_into_a_player_filter(db, league):
+    game = _game(db, league)
+    wes = _player(db, league, "Wes Receiver")
+    _played(db, wes, game)
+    _defense_game(db, league, game, allowed=10, sacks=3)
+    for source in ("a", "b"):
+        _project(db, source, wes, game, ACTUAL)
+        _project_defense(db, source, league[0], game, {"sacks": 3.0, "points_allowed": 10.0})
+
+    everything = _run(db)
+    only_defenses = _run(db, position="def")
+    only_receivers = _run(db, position="WR")
+
+    assert everything.compared == 2
+    assert [p.position for p in everything.by_position] == ["DEF", "WR"]
+    assert only_defenses.compared == 1 and only_defenses.by_position[0].position == "DEF"
+    assert only_receivers.compared == 1 and only_receivers.by_position[0].position == "WR"
+
+
+def test_a_defense_without_a_box_score_is_skipped_not_scored_as_zero(db, league):
+    game = _game(db, league)
+    for source in ("a", "b"):
+        _project_defense(db, source, league[0], game, {"sacks": 3.0, "points_allowed": 10.0})
+
+    assert _run(db).compared == 0

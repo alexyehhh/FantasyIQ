@@ -6,10 +6,11 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import pytest
 
-from app.db.models import Game, Player, PlayerGameStatsNFL, Team
+from app.db.models import Game, Player, PlayerGameStatsNFL, Team, TeamGameStatsNFL
 from app.db.session import SessionLocal
+from app.ml import defense as defense_model
 from app.ml.dataset import STATS
-from app.services.projections import base, fantasyiq, service
+from app.services.projections import base, fantasyiq, fantasyiq_defense, service
 from app.services.projections.news import TeamNews
 from app.services.scoring import default_config
 
@@ -129,14 +130,13 @@ def test_a_player_with_too_little_history_is_unavailable(db, league):
     assert "games of history" in result.notes[0]
 
 
-def test_kickers_and_defenses_are_not_modelled(db, league):
+def test_kickers_are_not_modelled(db, league):
     alpha, *_ = league
     kicker = _player(db, alpha, "Kip Kicker", position="PK")
 
-    results = _project(db, player_ids=[kicker.id], defense_ids=[alpha.id])
+    (result,) = _project(db, player_ids=[kicker.id])
 
-    assert [r.status for r in results] == ["unavailable", "unavailable"]
-    assert all("doesn't project" in r.notes[0] for r in results)
+    assert result.status == "unavailable" and "doesn't project" in result.notes[0]
 
 
 def test_an_untrained_model_is_an_error_not_a_guess(db, league, monkeypatch):
@@ -231,3 +231,79 @@ def test_the_depth_chart_decides_who_is_next_in_line(db, league, monkeypatch):
 
     assert by_workload == {"Ula Usual": 1, "Pat Promoted": 2}
     assert by_depth_chart == {"Pat Promoted": 1, "Ula Usual": 2}
+
+
+class DefenseFromOpponentOffense:
+    """Projects points allowed as the opponent's recent scoring, sacks as the defense's own."""
+
+    trained_through = "2026-01-01"
+
+    def predict(self, features):
+        lines = {s: features[f"{s}__ewm"].fillna(0) for s in defense_model.STATS}
+        lines["points_allowed"] = features["opp_points_scored__ewm"].fillna(0)
+        return pd.DataFrame(lines, index=features.index)
+
+
+def _team_stats(db, team, game, **stats):
+    db.add(TeamGameStatsNFL(team_id=team.id, game_id=game.id, **stats))
+    db.flush()
+
+
+def test_a_defense_is_projected_from_its_games_and_the_opponents_offense(db, league, monkeypatch):
+    alpha, bravo, past, _ = league
+    for game in past:
+        # Alpha's defense: 3 sacks, allowing 10. Bravo's defense allows 31 to Alpha's offense.
+        _team_stats(db, alpha, game, sacks=3, points_allowed=10)
+        _team_stats(db, bravo, game, sacks=1, points_allowed=31)
+    monkeypatch.setattr(
+        fantasyiq_defense.model, "load_cached", lambda *args: DefenseFromOpponentOffense()
+    )
+    fantasyiq_defense._cache.clear()
+
+    (result,) = _project(db, player_ids=[], defense_ids=[alpha.id])
+
+    assert result.status == "ok" and result.kind == "defense"
+    assert result.stats["sacks"] == pytest.approx(3)
+    # Bravo's offense scored 10 on Alpha each time, so that is what Alpha is expected to allow.
+    assert result.stats["points_allowed"] == pytest.approx(10)
+    assert "opponent's recent offense" in result.notes[0]
+
+
+def test_a_defense_with_too_few_games_is_unavailable(db, league, monkeypatch):
+    alpha, bravo, past, _ = league
+    _team_stats(db, alpha, past[0], sacks=3, points_allowed=10)
+    _team_stats(db, bravo, past[0], sacks=1, points_allowed=31)
+    monkeypatch.setattr(
+        fantasyiq_defense.model, "load_cached", lambda *args: DefenseFromOpponentOffense()
+    )
+    fantasyiq_defense._cache.clear()
+
+    (result,) = _project(db, player_ids=[], defense_ids=[alpha.id])
+
+    assert result.status == "unavailable" and "games of history" in result.notes[0]
+
+
+def test_an_untrained_defense_model_is_an_error(db, league, monkeypatch):
+    alpha, *_ = league
+    monkeypatch.setattr(fantasyiq_defense.model, "load_cached", lambda *args: None)
+
+    with pytest.raises(base.ProjectionError, match="defense model hasn't been trained"):
+        _project(db, player_ids=[], defense_ids=[alpha.id])
+
+
+def test_defenses_are_ranked_by_the_week(db, league, monkeypatch):
+    alpha, bravo, past, _ = league
+    for game in past:
+        _team_stats(db, alpha, game, sacks=5, points_allowed=10)
+        _team_stats(db, bravo, game, sacks=0, points_allowed=30)
+    monkeypatch.setattr(
+        fantasyiq_defense.model, "load_cached", lambda *args: DefenseFromOpponentOffense()
+    )
+    fantasyiq_defense._cache.clear()
+
+    ranked = fantasyiq.FANTASYIQ.rank(
+        db, sport="NFL", season="2026", week=4, day=None, positions=None, defenses=True, config=NFL
+    )
+
+    assert [c.entity_id for c in ranked] == [alpha.id, bravo.id]
+    assert all(c.kind == "defense" for c in ranked)

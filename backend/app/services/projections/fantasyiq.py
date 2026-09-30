@@ -21,10 +21,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.models import Game, Player
+from app.ml import defense as defense_model
 from app.ml import model as ml_model
 from app.ml.availability import EXPECTED_OUT, Timeline
 from app.ml.dataset import POSITION_ALIASES, POSITIONS, STATS, load_history, load_team_games
 from app.ml.features import MIN_PRIOR_GAMES, POSITION_CODES, build_features
+from app.services.projections import fantasyiq_defense
 from app.services.projections.base import (
     Key,
     ProjectionError,
@@ -34,7 +36,11 @@ from app.services.projections.base import (
     Unavailable,
     register,
 )
-from app.services.projections.expected_scoring import score_expected_player
+from app.services.projections.expected_scoring import (
+    score_expected_defense,
+    score_expected_player,
+)
+from app.services.projections.fantasyiq_defense import DefenseRow
 from app.services.projections.news import TeamNews, team_news
 from app.services.projections.sleeper import et_date
 from app.services.scoring import ScoringConfig, player_stat_values
@@ -84,8 +90,9 @@ class FantasyIQProvider:
     description = (
         "Our own gradient boosting model, trained on two seasons of NBA and NFL box scores. It "
         "projects from a player's recent games, home or away, rest and which teammates are out "
-        "(a backup's workload rises when the starter is hurt); it does not use the opponent yet. "
-        "NBA players and NFL QB, RB, WR and TE only."
+        "(a backup's workload rises when the starter is hurt); it does not use the opponent for "
+        "players yet. NBA players and NFL QB, RB, WR and TE, plus NFL team defenses (which do "
+        "allow for the opponent's offense)."
     )
     sports = frozenset({"NBA", "NFL"})
 
@@ -175,9 +182,28 @@ class FantasyIQProvider:
         sport = targets[0].sport if targets else ""
         results: dict[Key, StatProjection | Unavailable] = {}
         rows = []
+        defenses = [t for t in targets if t.kind == "defense"]
+        if defenses:
+            missing_defense = sorted(
+                {s for s, w in config.defense_weights.items() if w}
+                - set(defense_model.STATS)
+                - {"yards_allowed"}
+            )
+            answers = fantasyiq_defense.predict(
+                db, [DefenseRow(t.entity_id, t.game) for t in defenses]
+            )
+            for target in defenses:
+                answer = answers.get(
+                    target.entity_id, Unavailable("No projection for this defense")
+                )
+                if isinstance(answer, StatProjection):
+                    answer.unprojected = missing_defense
+                results[target.key] = answer
         for target in targets:
-            if target.kind != "player" or target.player is None:
-                results[target.key] = Unavailable(_NOT_MODELLED.format(what="team defenses"))
+            if target.kind == "defense":
+                continue
+            if target.player is None:
+                results[target.key] = Unavailable(_NOT_MODELLED.format(what="this"))
             else:
                 rows.append(_Row(target.player, target.game, target.is_home))
         if rows:
@@ -193,6 +219,23 @@ class FantasyIQProvider:
                     results[target.key] = answer
         return results
 
+    def _rank_defenses(
+        self, db: Session, season: str, week: int | None, config: ScoringConfig
+    ) -> list[RankedCandidate]:
+        """Every NFL defense playing in `week`, best expected fantasy points first."""
+        if week is None:
+            return []
+        games = db.scalars(
+            select(Game).where(Game.sport == "NFL", Game.season == season, Game.week == week)
+        )
+        rows = [DefenseRow(team, g) for g in games for team in (g.home_team_id, g.away_team_id)]
+        ranked = [
+            RankedCandidate("defense", team_id, score_expected_defense(config, answer.stats).points)
+            for team_id, answer in fantasyiq_defense.predict(db, rows).items()
+            if isinstance(answer, StatProjection)
+        ]
+        return sorted(ranked, key=lambda c: -c.points)
+
     def rank(
         self,
         db: Session,
@@ -206,7 +249,7 @@ class FantasyIQProvider:
         config: ScoringConfig,
     ) -> list[RankedCandidate]:
         if defenses:
-            return []
+            return self._rank_defenses(db, season, week, config) if sport == "NFL" else []
         query = select(Game).where(Game.sport == sport, Game.season == season)
         if sport == "NFL":
             if week is None:

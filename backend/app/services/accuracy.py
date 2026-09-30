@@ -14,8 +14,8 @@ Fairness rules:
 - "live" snapshots (taken ahead of the game) and "backtest" ones (replayed afterwards) are never
   mixed; the report says which it is.
 
-Players only for now: team defenses and kickers' distance-bracket edge cases aren't judged
-separately. Nothing is stored here; it is computed from the snapshots on request.
+Players and NFL team defenses are both scored (defenses as position "DEF"). Nothing is stored
+here; it is computed from the snapshots on request.
 """
 
 from __future__ import annotations
@@ -36,13 +36,17 @@ from app.db.models import (
     PlayerGameStats,
     PlayerGameStatsNFL,
     ProjectionSnapshot,
+    TeamGameStatsNFL,
 )
 from app.ml.features import POSITION_GROUPS
 from app.services.players import serialize_stats_row
 from app.services.projections.base import KickBucket
-from app.services.projections.expected_scoring import score_expected_player
+from app.services.projections.expected_scoring import (
+    score_expected_defense,
+    score_expected_player,
+)
 from app.services.projections.sleeper import et_date
-from app.services.scoring import ScoringConfig, score_player_game
+from app.services.scoring import ScoringConfig, score_defense_game, score_player_game
 
 Origin = Literal["live", "backtest"]
 # Fewer player-games than this says little about which source is better; the report says so.
@@ -187,13 +191,13 @@ def _totals(rows: list[_Row], source: str) -> Totals:
 def _latest_before_kickoff(
     db: Session, sport: str, origin: Origin, games: dict[int, Game]
 ) -> dict[tuple[str, int, int], dict[str, ProjectionSnapshot]]:
-    """(player, game) -> {source: that source's last snapshot taken before the game started}."""
+    """(kind, player or team, game) -> {source: that source's last snapshot taken before the
+    game started}."""
     rows = db.scalars(
         select(ProjectionSnapshot)
         .where(
             ProjectionSnapshot.sport == sport,
             ProjectionSnapshot.origin == origin,
-            ProjectionSnapshot.kind == "player",
             ProjectionSnapshot.game_id.in_(list(games)),
         )
         .order_by(ProjectionSnapshot.captured_at)
@@ -206,6 +210,8 @@ def _latest_before_kickoff(
 
 
 def _projected_points(config: ScoringConfig, snapshot: ProjectionSnapshot) -> float:
+    if snapshot.kind == "defense":
+        return score_expected_defense(config, snapshot.stats).points
     kicks = [KickBucket(**k) for k in snapshot.kicks or []]
     return score_expected_player(config, snapshot.stats, kicks).points
 
@@ -251,7 +257,8 @@ def compute(
     projected_by = {s: sum(1 for by in snapshots.values() if s in by) for s in chosen}
     common = {k: by for k, by in snapshots.items() if all(s in by for s in chosen)}
 
-    player_ids = {k[1] for k in common}
+    player_ids = {k[1] for k in common if k[0] == "player"}
+    team_ids = {k[1] for k in common if k[0] == "defense"}
     players = {p.id: p for p in db.scalars(select(Player).where(Player.id.in_(player_ids)))}
     model = _STATS_MODEL[sport]
     stats_rows = {
@@ -272,10 +279,37 @@ def compute(
         ):
             kicks[(kick.player_id, kick.game_id)].append((kick.distance, kick.result))
 
+    defense_rows: dict[tuple[int, int], dict[str, float]] = {}
+    if team_ids:
+        for row in db.scalars(
+            select(TeamGameStatsNFL).where(
+                TeamGameStatsNFL.team_id.in_(team_ids),
+                TeamGameStatsNFL.game_id.in_({k[2] for k in common}),
+            )
+        ):
+            defense_rows[(row.team_id, row.game_id)] = {
+                column.name: getattr(row, column.name) for column in row.__table__.columns
+            }
+
     rows: list[_Row] = []
     compared_per_source = dict.fromkeys(chosen, 0)
     wanted = position.upper() if position else None
-    for (_, player_id, game_id), by_source in common.items():
+    for (kind, player_id, game_id), by_source in common.items():
+        if kind == "defense":
+            line = defense_rows.get((player_id, game_id))
+            if line is None or (wanted and wanted != "DEF"):
+                continue
+            rows.append(
+                _Row(
+                    period=_period(sport, games[game_id]),
+                    position="DEF",
+                    actual=score_defense_game(config, line),
+                    projected={s: _projected_points(config, by_source[s]) for s in chosen},
+                )
+            )
+            for s in chosen:
+                compared_per_source[s] += 1
+            continue
         player = players.get(player_id)
         bucket = position_group(sport, player.position if player else None)
         if bucket is None or (wanted and bucket != wanted):
@@ -310,7 +344,7 @@ def compute(
         s: Coverage(projected=projected_by[s], compared=compared_per_source[s]) for s in chosen
     }
     if not rows:
-        report.notes.append("No player-games were projected by every source and then played.")
+        report.notes.append("Nothing was projected by every source and then played.")
         return report
 
     report.overall = {s: _totals(rows, s) for s in chosen}

@@ -31,7 +31,7 @@ export function orderedSources(sources: string[]): string[] {
 }
 
 export const POSITION_FILTERS: Record<Sport, string[]> = {
-  NFL: ["QB", "RB", "WR", "TE", "K"],
+  NFL: ["QB", "RB", "WR", "TE", "K", "DEF"],
   NBA: ["G", "F", "C"],
 };
 
