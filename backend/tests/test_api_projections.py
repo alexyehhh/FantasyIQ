@@ -87,7 +87,7 @@ def static(monkeypatch):
 def test_lists_the_available_sources(client):
     body = client.get("/api/v1/projections/sources").json()
 
-    assert [s["name"] for s in body] == ["sleeper"]  # recent form and the blend were removed
+    assert [s["name"] for s in body] == ["sleeper", "fantasyiq"]
     assert all(s["label"] and s["description"] and s["sports"] for s in body)
 
 

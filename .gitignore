@@ -20,3 +20,6 @@ out/
 
 # OS
 .DS_Store
+
+# Trained projection models (regenerate with python -m app.ml.train)
+backend/models/
