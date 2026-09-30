@@ -64,6 +64,7 @@ def test_retry_delay_doubles_from_one_minute_to_a_cap():
     assert [retry_delay(n) for n in (1, 2, 3, 4, 5, 6, 9)] == [
         timedelta(minutes=m) for m in (1, 2, 4, 8, 15, 15, 15)
     ]
+    assert retry_delay(9, timedelta(hours=6)) == timedelta(minutes=256)
 
 
 def test_a_job_that_never_ran_is_due_and_one_that_did_waits_its_interval():
@@ -232,7 +233,7 @@ def test_only_one_worker_can_be_leader_and_another_takes_over_when_it_lets_go():
 def test_build_lanes_keeps_live_games_apart_from_the_slow_jobs():
     from app.core.config import Settings
 
-    live, maintenance = worker.build_lanes(Settings())
+    live, maintenance, models = worker.build_lanes(Settings())
 
     assert [job.name for job in live._jobs] == ["live"]
     assert [job.name for job in maintenance._jobs] == [
@@ -241,3 +242,21 @@ def test_build_lanes_keeps_live_games_apart_from_the_slow_jobs():
         "backfill",
         "snapshots",
     ]
+    assert [job.name for job in models._jobs] == ["retrain"]
+    assert set(worker.job_intervals(Settings())) == {
+        job.name for lane in (live, maintenance, models) for job in lane._jobs
+    }
+
+
+def test_snapshots_run_hourly_and_retraining_weekly_with_slow_retries():
+    from app.core.config import Settings
+
+    _, maintenance, models = worker.build_lanes(Settings())
+    snapshots = next(job for job in maintenance._jobs if job.name == "snapshots")
+    retrain_job = models._jobs[0]
+
+    assert snapshots.interval == timedelta(hours=1)
+    assert snapshots.max_retry == timedelta(minutes=15)
+    assert retrain_job.interval == timedelta(days=7)
+    failing = JobRun(name="retrain", last_attempt_at=T0, consecutive_failures=12)
+    assert due_at(retrain_job, failing) == T0 + timedelta(hours=6)

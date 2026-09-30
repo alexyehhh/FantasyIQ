@@ -2,7 +2,7 @@
 
 `capture` asks every source for its stat line for everyone it projects in the games about to be
 played and stores it (`ProjectionSnapshot`). It only looks at games that haven't started, so a
-snapshot can't have seen the result. Run often (the worker does, every few hours): a capture whose
+snapshot can't have seen the result. Run often (the worker does, every hour): a capture whose
 stat line is the same as the source's latest for that player and game is skipped, so the table
 holds the changes, and the last row before kickoff is what the source said going in.
 

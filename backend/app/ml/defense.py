@@ -34,7 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from app.ml.features import DECAY, MIN_PRIOR_GAMES
-from app.ml.model import MODEL_DIR
+from app.ml.model import MODEL_DIR, dump_atomic
 from app.services.projections.expected_scoring import score_expected_defense
 from app.services.scoring import ScoringConfig, score_defense_game
 
@@ -169,10 +169,12 @@ def train(features: pd.DataFrame) -> dict[str, Any]:
 
 
 def save(model: DefenseModel, directory: Path = MODEL_DIR) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
+    return dump_atomic(model, directory / FILE)
+
+
+def load(directory: Path = MODEL_DIR) -> DefenseModel | None:
     path = directory / FILE
-    joblib.dump(model, path)
-    return path
+    return joblib.load(path) if path.exists() else None
 
 
 _cache: dict[str, tuple[float, DefenseModel]] = {}

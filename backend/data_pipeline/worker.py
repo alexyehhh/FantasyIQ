@@ -2,23 +2,25 @@
 
 Run it as its own service (`python -m data_pipeline.worker`, the `worker` service in
 docker-compose.yml). The API never calls ESPN, so how many people use the app has no effect on how
-hard ESPN is hit, or on how fast a page loads. Two lanes of jobs run in their own threads, so a
-long roster sync can't hold up a live game:
+hard ESPN is hit, or on how fast a page loads. Three lanes of jobs run in their own threads, so a
+long roster sync can't hold up a live game, and minutes of model training can't hold up either:
 
     live        every ~15 s   stats of games in progress or just finished (refresh.py)
     directory   every 6 h     teams, rosters, schedule and injuries (espn_directory.py)
     injuries    every 15 min  just the injury report, two requests
     backfill    every hour    box scores of finished games older than the live refresh looks back
-    snapshots   every 6 h     each projection source's projections for upcoming games, saved to be
+    snapshots   every hour    each projection source's projections for upcoming games, saved to be
                               scored against the real results (services/projections/snapshots.py)
+    retrain     every week    our projection models refit on every finished game, each kept only
+                              if it scores no worse than the saved one (app/ml/retrain.py)
 
 Intervals come from the settings (`WORKER_*_INTERVAL_SECONDS`). Every request to ESPN goes through
 one paced gate (data_pipeline/espn.py) that also stops asking for a while when ESPN answers 429/503.
 
 Staying up: a job that raises is logged, recorded in `job_runs` and retried after 1, 2, 4 ... up to
-15 minutes; nothing a job does can stop the worker or the other jobs. What ran when lives in the
-database, so a restart (or a crash loop) doesn't rerun everything and hit ESPN again, and
-`GET /api/v1/health/jobs` shows anything that has gone stale.
+15 minutes (6 hours for retraining); nothing a job does can stop the worker or the other jobs. What
+ran when lives in the database, so a restart (or a crash loop) doesn't rerun everything and hit
+ESPN again, and `GET /api/v1/health/jobs` shows anything that has gone stale.
 
 Running more than one copy is safe: they elect a leader with a Postgres advisory lock, and only the
 leader runs jobs. The others wait, and take over within seconds if the leader dies.
@@ -38,6 +40,7 @@ from sqlalchemy import Engine, select, text
 from app.core.config import Settings, get_settings
 from app.db.models import JobRun
 from app.db.session import SessionLocal, engine
+from app.ml import retrain
 from app.services.projections import snapshots
 from data_pipeline import backfill as backfill_job
 from data_pipeline import espn_directory
@@ -48,6 +51,8 @@ logger = logging.getLogger("worker")
 
 RETRY_BASE = timedelta(seconds=60)
 RETRY_MAX = timedelta(minutes=15)
+# Retraining takes minutes of CPU, so a failure is retried after hours, not minutes.
+RETRAIN_RETRY_MAX = timedelta(hours=6)
 # Any number; it only has to be the same in every worker.
 LEADER_LOCK_KEY = 7_046_001
 
@@ -62,11 +67,13 @@ class Job:
     name: str
     interval: timedelta
     run: Callable[[], None]
+    # The longest wait between retries after failures; a heavy job sets it longer.
+    max_retry: timedelta = RETRY_MAX
 
 
-def retry_delay(failures: int) -> timedelta:
-    """How long to wait after the `failures`-th failure in a row: 1, 2, 4 ... minutes, to 15."""
-    return min(RETRY_BASE * 2 ** (failures - 1), RETRY_MAX)
+def retry_delay(failures: int, cap: timedelta = RETRY_MAX) -> timedelta:
+    """How long to wait after the `failures`-th failure in a row: 1, 2, 4 ... minutes, to `cap`."""
+    return min(RETRY_BASE * 2 ** (failures - 1), cap)
 
 
 def due_at(job: Job, state: JobRun | None) -> datetime:
@@ -74,7 +81,7 @@ def due_at(job: Job, state: JobRun | None) -> datetime:
     if state is None or state.last_attempt_at is None:
         return datetime.min
     if state.consecutive_failures:
-        return state.last_attempt_at + retry_delay(state.consecutive_failures)
+        return state.last_attempt_at + retry_delay(state.consecutive_failures, job.max_retry)
     return state.last_attempt_at + job.interval
 
 
@@ -130,7 +137,7 @@ class Scheduler:
         except Exception:  # noqa: BLE001 - e.g. the database is down; the guard below still holds
             logger.exception("Could not record the run of job %s", job.name)
             failures = 1 if error else 0
-        wait = retry_delay(failures) if error else job.interval
+        wait = retry_delay(failures, job.max_retry) if error else job.interval
         self._not_before[job.name] = started + wait
 
     def _record(self, job: Job, started: datetime, error: str | None) -> int:
@@ -223,6 +230,14 @@ def run_snapshots() -> None:
         raise RuntimeError("; ".join(report.errors))
 
 
+def run_retrain() -> None:
+    """Retrain our projection models on every finished game; see app/ml/retrain.py for when a new
+    model replaces the saved one."""
+    failed = [o.summary() for o in retrain.retrain_all() if o.error is not None]
+    if failed:
+        raise RuntimeError("; ".join(failed))
+
+
 def _seconds(value: float) -> timedelta:
     return timedelta(seconds=value)
 
@@ -235,6 +250,7 @@ def job_intervals(settings: Settings) -> dict[str, float]:
         "injuries": settings.worker_injuries_interval_seconds,
         "backfill": settings.worker_backfill_interval_seconds,
         "snapshots": settings.worker_snapshots_interval_seconds,
+        "retrain": settings.worker_retrain_interval_seconds,
     }
 
 
@@ -258,7 +274,18 @@ def build_lanes(settings: Settings) -> list[Scheduler]:
         ],
         poll_seconds=30.0,
     )
-    return [live, maintenance]
+    models = Scheduler(
+        [
+            Job(
+                "retrain",
+                _seconds(intervals["retrain"]),
+                run_retrain,
+                max_retry=RETRAIN_RETRY_MAX,
+            )
+        ],
+        poll_seconds=60.0,
+    )
+    return [live, maintenance, models]
 
 
 # --- Leader election ---------------------------------------------------------------------------

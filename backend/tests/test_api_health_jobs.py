@@ -46,12 +46,12 @@ def test_a_worker_that_has_never_run_is_degraded_and_lists_every_job(client):
     status, jobs = _jobs(client)
 
     assert status == "degraded"
-    assert set(jobs) == {"live", "directory", "injuries", "backfill", "snapshots"}
+    assert set(jobs) == {"live", "directory", "injuries", "backfill", "snapshots", "retrain"}
     assert all(job["overdue"] and job["last_success_at"] is None for job in jobs.values())
 
 
 def test_jobs_that_ran_on_time_are_ok(client, db):
-    for name in ("live", "directory", "injuries", "backfill", "snapshots"):
+    for name in ("live", "directory", "injuries", "backfill", "snapshots", "retrain"):
         db.add(JobRun(name=name, last_attempt_at=_now(), last_success_at=_now()))
     db.flush()
 
@@ -65,7 +65,7 @@ def test_jobs_that_ran_on_time_are_ok(client, db):
 def test_a_job_that_has_gone_quiet_is_overdue_and_says_why(client, db):
     interval = get_settings().worker_injuries_interval_seconds
     long_ago = _now() - timedelta(seconds=interval * 4)
-    for name in ("live", "directory", "backfill", "snapshots"):
+    for name in ("live", "directory", "backfill", "snapshots", "retrain"):
         db.add(JobRun(name=name, last_attempt_at=_now(), last_success_at=_now()))
     db.add(
         JobRun(

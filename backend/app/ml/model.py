@@ -8,6 +8,8 @@ any size or sign, so they use squared error.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -166,11 +168,24 @@ def train_adjusters(sport: str, features: pd.DataFrame) -> dict[str, Ridge]:
     return adjusters
 
 
-def save(model: SportModel, directory: Path = MODEL_DIR) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{model.sport.lower()}.joblib"
-    joblib.dump(model, path)
+def dump_atomic(obj: Any, path: Path) -> Path:
+    """Write `obj` to `path` in one step: to a temporary file beside it, then renamed over it, so
+    the API never reads a half-written model (it reloads when the file's mtime changes)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            joblib.dump(obj, handle)
+        os.chmod(tmp, 0o644)  # mkstemp makes it owner-only
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
     return path
+
+
+def save(model: SportModel, directory: Path = MODEL_DIR) -> Path:
+    return dump_atomic(model, directory / f"{model.sport.lower()}.joblib")
 
 
 def load(sport: str, directory: Path = MODEL_DIR) -> SportModel | None:
