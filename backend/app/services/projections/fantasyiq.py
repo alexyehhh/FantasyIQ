@@ -34,6 +34,7 @@ from app.services.projections.base import (
     register,
 )
 from app.services.projections.expected_scoring import score_expected_player
+from app.services.projections.news import TeamNews, team_news
 from app.services.projections.sleeper import et_date
 from app.services.scoring import ScoringConfig, player_stat_values
 
@@ -116,7 +117,11 @@ class FantasyIQProvider:
         # Only games before the one being projected, so a game already played is projected as it
         # would have been beforehand.
         history = history[history["start_time"] < history["player_id"].map(starts)]
-        out = _expected_out(db, {r.player.team_id for r in eligible})
+        teams = {r.player.team_id for r in eligible}
+        news = team_news(db, sport, teams)
+        out = _expected_out(db, teams)
+        for team_id, ids in news.out_by_team.items():
+            out.setdefault(team_id, set()).update(ids)
         targets = pd.DataFrame(
             [
                 {
@@ -130,11 +135,13 @@ class FantasyIQProvider:
                         r.game.season,
                         timeline.position_before(r.player.team_id, pd.Timestamp(r.game.start_time)),
                         out.get(r.player.team_id, set()),
+                        news.depth,
                     ),
                 }
                 for r in eligible
             ]
         )
+        news_notes = _news_notes(db, timeline, eligible, out, news)
         stacked = pd.concat([history, targets], ignore_index=True)
         stacked = stacked.sort_values(["player_id", "start_time"]).reset_index(drop=True)
         features = build_features(stacked, stats)
@@ -149,7 +156,10 @@ class FantasyIQProvider:
                 continue
             results[int(player_id)] = StatProjection(
                 stats={stat: float(v) for stat, v in lines.loc[index].items()},
-                notes=[f"Projection from the FantasyIQ model (games to {saved.trained_through})."],
+                notes=[
+                    f"Projection from the FantasyIQ model (games to {saved.trained_through}).",
+                    *news_notes.get(int(player_id), []),
+                ],
             )
         return results
 
@@ -229,6 +239,36 @@ class FantasyIQProvider:
                 points = score_expected_player(config, answer.stats).points
                 ranked.append(RankedCandidate("player", player_id, points, injuries[player_id]))
         return sorted(ranked, key=lambda c: -c.points)
+
+
+def _news_notes(
+    db: Session, timeline: Timeline, rows: Sequence[_Row], out: dict[int, set[int]], news: TeamNews
+) -> dict[int, list[str]]:
+    """What news moved each projection, in words: which teammates are out and where the depth
+    chart puts the player."""
+    missing: dict[int, set[int]] = {}
+    for row in rows:
+        team = row.player.team_id
+        k = timeline.position_before(team, pd.Timestamp(row.game.start_time))
+        _, gone, _, _ = timeline.context(team, row.game.season, k, out.get(team, set()))
+        missing[row.player.id] = gone - {row.player.id}
+    ids = set().union(*missing.values()) if missing else set()
+    people = {p.id: p for p in db.scalars(select(Player).where(Player.id.in_(ids)))} if ids else {}
+    notes: dict[int, list[str]] = {}
+    for row in rows:
+        lines = []
+        names = [
+            f"{people[q].name} ({news.notes.get(q) or people[q].injury_status or 'out'})"
+            for q in sorted(missing[row.player.id])
+            if q in people
+        ]
+        if names:
+            lines.append(f"Teammates out, so the workload is adjusted: {', '.join(names)}.")
+        order = news.depth.get(row.player.id)
+        if order is not None:
+            lines.append(f"Depth chart lists him {row.player.position}{order}.")
+        notes[row.player.id] = lines
+    return notes
 
 
 def _expected_out(db: Session, team_ids: set[int | None]) -> dict[int, set[int]]:

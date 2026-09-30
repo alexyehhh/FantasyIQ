@@ -10,6 +10,7 @@ from app.db.models import Game, Player, PlayerGameStatsNFL, Team
 from app.db.session import SessionLocal
 from app.ml.dataset import STATS
 from app.services.projections import base, fantasyiq, service
+from app.services.projections.news import TeamNews
 from app.services.scoring import default_config
 
 NFL = default_config("NFL")
@@ -38,6 +39,7 @@ def db():
 def trained(monkeypatch):
     monkeypatch.setattr(fantasyiq.ml_model, "load_cached", lambda sport: AverageOfLastThree())
     fantasyiq._data_cache.clear()  # each test has its own games, which the cache can't tell apart
+    monkeypatch.setattr(fantasyiq, "team_news", lambda db, sport, teams: TeamNews())
 
 
 def _team(db, name, abbreviation):
@@ -194,3 +196,38 @@ def test_a_teammate_listed_out_raises_the_backups_workload(db, league, monkeypat
 
     assert healthy.stats["rushing_attempts"] == 0
     assert hurt.stats["rushing_attempts"] == pytest.approx(15)  # the whole load: no other back
+
+
+def test_the_depth_chart_decides_who_is_next_in_line(db, league, monkeypatch):
+    alpha, _, past, _ = league
+    starter = _player(db, alpha, "Sid Starter", position="RB")
+    usual_backup = _player(db, alpha, "Ula Usual", position="RB")
+    promoted = _player(db, alpha, "Pat Promoted", position="RB")
+    for game in past:
+        db.add(PlayerGameStatsNFL(player_id=starter.id, game_id=game.id, rushing_attempts=15))
+        db.add(PlayerGameStatsNFL(player_id=usual_backup.id, game_id=game.id, rushing_attempts=7))
+        db.add(PlayerGameStatsNFL(player_id=promoted.id, game_id=game.id, rushing_attempts=3))
+    starter.injury_status = "Out"
+    db.flush()
+
+    class ReportsRank:
+        trained_through = "2026-01-01"
+
+        def predict(self, features):
+            lines = {s: features[f"{s}__m3"] for s in STATS["NFL"]}
+            lines["rushing_attempts"] = features["group_rank"].fillna(0)
+            return pd.DataFrame(lines, index=features.index)
+
+    monkeypatch.setattr(fantasyiq.ml_model, "load_cached", lambda sport: ReportsRank())
+
+    def ranks(depth):
+        monkeypatch.setattr(fantasyiq, "team_news", lambda db, sport, teams: TeamNews(depth=depth))
+        fantasyiq._data_cache.clear()
+        results = _project(db, player_ids=[usual_backup.id, promoted.id])
+        return {r.name: r.stats["rushing_attempts"] for r in results}
+
+    by_workload = ranks({})
+    by_depth_chart = ranks({promoted.id: 1, usual_backup.id: 2, starter.id: 3})
+
+    assert by_workload == {"Ula Usual": 1, "Pat Promoted": 2}
+    assert by_depth_chart == {"Pat Promoted": 1, "Ula Usual": 2}

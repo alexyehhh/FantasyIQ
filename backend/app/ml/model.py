@@ -97,7 +97,11 @@ def train(sport: str, features: pd.DataFrame) -> dict[str, HistGradientBoostingR
 
 def _context_features(stats: tuple[str, ...]) -> list[str]:
     chosen = context_stats(stats)
-    return [f"{kind}__{s}" for s in chosen for kind in ("inherit", "new_inherit", "ret")]
+    return [
+        f"{kind}__{s}"
+        for s in chosen
+        for kind in ("inherit", "new_inherit", "top_new_inherit", "ret")
+    ]
 
 
 def _context_matrix(features: pd.DataFrame, stats: tuple[str, ...]) -> np.ndarray:

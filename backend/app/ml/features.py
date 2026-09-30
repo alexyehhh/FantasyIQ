@@ -60,8 +60,9 @@ def context_columns(stats: Sequence[str]) -> list[str]:
         [f"vac__{s}" for s in chosen]
         + [f"inherit__{s}" for s in chosen]
         + [f"new_inherit__{s}" for s in chosen]
+        + [f"top_new_inherit__{s}" for s in chosen]
         + [f"ret__{s}" for s in chosen]
-        + ["n_absent", "n_returning"]
+        + ["group_rank", "n_absent", "n_returning"]
     )
 
 

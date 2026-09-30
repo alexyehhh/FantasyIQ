@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     sleeper_projections_url: str = "https://api.sleeper.com/projections"
     sleeper_state_url: str = "https://api.sleeper.app/v1/state"
     sleeper_timeout_seconds: float = 15.0
+    # Sleeper's player file (depth charts and injury news). It is ~15 MB and Sleeper asks for it to
+    # be fetched sparingly, so it is kept for hours, not minutes.
+    sleeper_players_url: str = "https://api.sleeper.app/v1/players"
+    sleeper_players_ttl_seconds: float = 6 * 3600.0
     sleeper_cache_ttl_seconds: float = 900.0
 
     # The AI Analyst (Milestone 9, app/ai/) calls Gemini for tool-calling and explanations.
