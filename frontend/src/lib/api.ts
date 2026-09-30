@@ -599,6 +599,63 @@ async function fetchJson<T>(path: string, what: string): Promise<T> {
   return res.json();
 }
 
+/** One source's accuracy over a set of player-games, in fantasy points. */
+export interface AccuracyTotals {
+  n: number;
+  /** Average size of the miss: lower is better. */
+  mae: number;
+  rmse: number;
+  /** Mean of projected minus actual: positive means it projects too high. */
+  bias: number;
+  mean_projected: number;
+  mean_actual: number;
+  /** Average per-week agreement between projected and actual order of players (-1 to 1). */
+  rank_corr: number | null;
+}
+
+/** Each source's average miss in one NFL week or NBA week, on the same player-games. */
+export interface AccuracyPoint {
+  key: string;
+  label: string;
+  n: number;
+  mae: Record<string, number>;
+}
+
+export interface AccuracyPosition {
+  position: string;
+  n: number;
+  enough_data: boolean;
+  sources: Record<string, AccuracyTotals>;
+}
+
+export interface AccuracyResponse {
+  sport: Sport;
+  scoring: string;
+  origin: "live" | "backtest";
+  sources: string[];
+  /** Player-games every compared source projected and that were played. */
+  compared: number;
+  did_not_play: number;
+  enough_data: boolean;
+  overall: Record<string, AccuracyTotals>;
+  by_position: AccuracyPosition[];
+  series: AccuracyPoint[];
+  coverage: Record<string, { projected: number; compared: number }>;
+  notes: string[];
+}
+
+/** How accurate each source's saved, pre-kickoff projections were against the real results. */
+export function getAccuracy(query: {
+  sport: Sport;
+  position?: string | null;
+  scoring?: ScoringConfig | null;
+}): Promise<AccuracyResponse> {
+  const params = new URLSearchParams({ sport: query.sport });
+  if (query.position) params.set("position", query.position);
+  if (query.scoring) params.set("scoring", JSON.stringify(query.scoring));
+  return fetchJson(`/api/v1/accuracy?${params}`, "load projection accuracy");
+}
+
 export function getProjectionSources(): Promise<ProjectionSource[]> {
   return fetchJson("/api/v1/projections/sources", "list projection sources");
 }

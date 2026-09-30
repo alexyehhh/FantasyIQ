@@ -1,4 +1,6 @@
 import type {
+  AccuracyResponse,
+  AccuracyTotals,
   DefenseDetail,
   DefenseListItem,
   PlayerDetail,
@@ -277,6 +279,67 @@ export function makeProjectionEntry(
     injury_status: null,
     approximate: false,
     unprojected_stats: [],
+    notes: [],
+    ...overrides,
+  };
+}
+
+
+export function makeAccuracyTotals(overrides: Partial<AccuracyTotals> = {}): AccuracyTotals {
+  return {
+    n: 120,
+    mae: 4.5,
+    rmse: 6.1,
+    bias: 0.4,
+    mean_projected: 9.8,
+    mean_actual: 9.4,
+    rank_corr: 0.62,
+    ...overrides,
+  };
+}
+
+/** Two sources over two weeks, enough games to call: the model is 0.6 points closer. */
+export function makeAccuracyResponse(overrides: Partial<AccuracyResponse> = {}): AccuracyResponse {
+  return {
+    sport: "NFL",
+    scoring: "FantasyIQ standard (PPR)",
+    origin: "live",
+    sources: ["fantasyiq", "sleeper"],
+    compared: 240,
+    did_not_play: 7,
+    enough_data: true,
+    overall: {
+      fantasyiq: makeAccuracyTotals({ mae: 4.4 }),
+      sleeper: makeAccuracyTotals({ mae: 5.0, bias: -0.8, rank_corr: 0.55 }),
+    },
+    by_position: [
+      {
+        position: "RB",
+        n: 120,
+        enough_data: true,
+        sources: {
+          fantasyiq: makeAccuracyTotals({ mae: 4.0 }),
+          sleeper: makeAccuracyTotals({ mae: 4.8 }),
+        },
+      },
+      {
+        position: "TE",
+        n: 20,
+        enough_data: false,
+        sources: {
+          fantasyiq: makeAccuracyTotals({ n: 20, mae: 3.1 }),
+          sleeper: makeAccuracyTotals({ n: 20, mae: 3.0 }),
+        },
+      },
+    ],
+    series: [
+      { key: "2026-04", label: "Week 4", n: 120, mae: { fantasyiq: 4.6, sleeper: 5.1 } },
+      { key: "2026-05", label: "Week 5", n: 120, mae: { fantasyiq: 4.2, sleeper: 4.9 } },
+    ],
+    coverage: {
+      fantasyiq: { projected: 260, compared: 240 },
+      sleeper: { projected: 250, compared: 240 },
+    },
     notes: [],
     ...overrides,
   };

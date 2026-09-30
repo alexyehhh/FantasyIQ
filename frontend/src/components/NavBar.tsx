@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   { href: "/players", label: "Players" },
   { href: "/start", label: "Start / Sit" },
+  { href: "/accuracy", label: "Accuracy" },
 ];
 
 export default function NavBar() {
@@ -13,7 +14,7 @@ export default function NavBar() {
 
   return (
     <header className="border-b border-white/10 bg-nav text-white">
-      <div className="flex h-14 w-full items-center gap-7 px-4 sm:px-6">
+      <div className="flex h-14 w-full items-center gap-3 px-4 sm:gap-7 sm:px-6">
         <Link
           href="/"
           aria-label="FantasyIQ home"
@@ -22,7 +23,7 @@ export default function NavBar() {
           <span className="grid h-7 w-7 place-items-center rounded-lg bg-accent text-base text-on-accent">
             IQ
           </span>
-          <span>
+          <span className="hidden sm:inline">
             Fantasy<span className="text-[#c9b8ff]">IQ</span>
           </span>
         </Link>
@@ -34,7 +35,7 @@ export default function NavBar() {
                 key={link.href}
                 href={link.href}
                 aria-current={active ? "page" : undefined}
-                className={`-mb-px flex items-center border-b-[3px] px-3.5 text-sm font-semibold ${
+                className={`-mb-px flex items-center border-b-[3px] px-2.5 text-sm font-semibold sm:px-3.5 ${
                   active
                     ? "border-accent text-white"
                     : "border-transparent text-[#b9b0da] hover:text-white"
