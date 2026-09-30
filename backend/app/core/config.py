@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     worker_injuries_interval_seconds: float = 900.0
     worker_directory_interval_seconds: float = 21600.0
     worker_backfill_interval_seconds: float = 3600.0
+    # Saving each projection source's projections for upcoming games, to score them afterwards.
+    worker_snapshots_interval_seconds: float = 6 * 3600.0
     worker_backfill_games_per_run: int = 20
     live_refresh_cooldown_seconds: float = 30.0
     # Short, since one slow game shouldn't hold up the others being refreshed.

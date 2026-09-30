@@ -9,6 +9,8 @@ long roster sync can't hold up a live game:
     directory   every 6 h     teams, rosters, schedule and injuries (espn_directory.py)
     injuries    every 15 min  just the injury report, two requests
     backfill    every hour    box scores of finished games older than the live refresh looks back
+    snapshots   every 6 h     each projection source's projections for upcoming games, saved to be
+                              scored against the real results (services/projections/snapshots.py)
 
 Intervals come from the settings (`WORKER_*_INTERVAL_SECONDS`). Every request to ESPN goes through
 one paced gate (data_pipeline/espn.py) that also stops asking for a while when ESPN answers 429/503.
@@ -36,6 +38,7 @@ from sqlalchemy import Engine, select, text
 from app.core.config import Settings, get_settings
 from app.db.models import JobRun
 from app.db.session import SessionLocal, engine
+from app.services.projections import snapshots
 from data_pipeline import backfill as backfill_job
 from data_pipeline import espn_directory
 from data_pipeline.espn import ESPNClient
@@ -205,6 +208,21 @@ def run_backfill(games_per_sport: int) -> None:
         raise RuntimeError("; ".join(failed))
 
 
+def run_snapshots() -> None:
+    """Save every projection source's projections for the games about to be played. This calls
+    Sleeper (and our own model), not ESPN."""
+    with SessionLocal() as db:
+        try:
+            report = snapshots.capture(db, now=_utc_now())
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+    logger.info("Projection snapshots: %s", report.summary())
+    if report.errors:
+        raise RuntimeError("; ".join(report.errors))
+
+
 def _seconds(value: float) -> timedelta:
     return timedelta(seconds=value)
 
@@ -216,6 +234,7 @@ def job_intervals(settings: Settings) -> dict[str, float]:
         "directory": settings.worker_directory_interval_seconds,
         "injuries": settings.worker_injuries_interval_seconds,
         "backfill": settings.worker_backfill_interval_seconds,
+        "snapshots": settings.worker_snapshots_interval_seconds,
     }
 
 
@@ -235,6 +254,7 @@ def build_lanes(settings: Settings) -> list[Scheduler]:
                 _seconds(intervals["backfill"]),
                 lambda: run_backfill(settings.worker_backfill_games_per_run),
             ),
+            Job("snapshots", _seconds(intervals["snapshots"]), run_snapshots),
         ],
         poll_seconds=30.0,
     )

@@ -19,6 +19,7 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.models import Game, Player
 from app.ml import model as ml_model
 from app.ml.availability import EXPECTED_OUT, Timeline
@@ -141,7 +142,7 @@ class FantasyIQProvider:
                 for r in eligible
             ]
         )
-        news_notes = _news_notes(db, timeline, eligible, out, news)
+        news_notes, news_facts = _news_notes(db, timeline, eligible, out, news)
         stacked = pd.concat([history, targets], ignore_index=True)
         stacked = stacked.sort_values(["player_id", "start_time"]).reset_index(drop=True)
         features = build_features(stacked, stats)
@@ -160,6 +161,11 @@ class FantasyIQProvider:
                     f"Projection from the FantasyIQ model (games to {saved.trained_through}).",
                     *news_notes.get(int(player_id), []),
                 ],
+                meta={
+                    "trained_through": saved.trained_through,
+                    "first_choice_share": get_settings().projection_first_choice_share,
+                    **news_facts.get(int(player_id), {}),
+                },
             )
         return results
 
@@ -243,9 +249,9 @@ class FantasyIQProvider:
 
 def _news_notes(
     db: Session, timeline: Timeline, rows: Sequence[_Row], out: dict[int, set[int]], news: TeamNews
-) -> dict[int, list[str]]:
-    """What news moved each projection, in words: which teammates are out and where the depth
-    chart puts the player."""
+) -> tuple[dict[int, list[str]], dict[int, dict[str, object]]]:
+    """What news moved each projection, in words (which teammates are out, where the depth chart
+    puts the player) and as data to save with a snapshot."""
     missing: dict[int, set[int]] = {}
     for row in rows:
         team = row.player.team_id
@@ -255,6 +261,7 @@ def _news_notes(
     ids = set().union(*missing.values()) if missing else set()
     people = {p.id: p for p in db.scalars(select(Player).where(Player.id.in_(ids)))} if ids else {}
     notes: dict[int, list[str]] = {}
+    facts: dict[int, dict[str, object]] = {}
     for row in rows:
         lines = []
         names = [
@@ -268,7 +275,13 @@ def _news_notes(
         if order is not None:
             lines.append(f"Depth chart lists him {row.player.position}{order}.")
         notes[row.player.id] = lines
-    return notes
+        facts[row.player.id] = {
+            "teammates_out": [
+                people[q].name for q in sorted(missing[row.player.id]) if q in people
+            ],
+            "depth_order": order,
+        }
+    return notes, facts
 
 
 def _expected_out(db: Session, team_ids: set[int | None]) -> dict[int, set[int]]:

@@ -12,6 +12,7 @@ from app.db.models.job_run import JobRun
 from app.db.models.player import Player
 from app.db.models.player_game_stats import PlayerGameStats
 from app.db.models.player_game_stats_nfl import PlayerGameStatsNFL
+from app.db.models.projection_snapshot import ProjectionSnapshot
 from app.db.models.team import Team
 from app.db.models.team_game_stats_nfl import TeamGameStatsNFL
 
@@ -23,5 +24,6 @@ __all__ = [
     "PlayerGameStats",
     "PlayerGameStatsNFL",
     "FieldGoalKick",
+    "ProjectionSnapshot",
     "TeamGameStatsNFL",
 ]

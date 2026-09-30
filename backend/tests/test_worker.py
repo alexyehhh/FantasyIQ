@@ -44,11 +44,15 @@ class Clock:
 def _state(session_factory, name):
     with session_factory() as db:
         row = db.get(JobRun, name)
-        return None if row is None else (
-            row.last_attempt_at,
-            row.last_success_at,
-            row.consecutive_failures,
-            row.last_error,
+        return (
+            None
+            if row is None
+            else (
+                row.last_attempt_at,
+                row.last_success_at,
+                row.consecutive_failures,
+                row.last_error,
+            )
         )
 
 
@@ -231,4 +235,9 @@ def test_build_lanes_keeps_live_games_apart_from_the_slow_jobs():
     live, maintenance = worker.build_lanes(Settings())
 
     assert [job.name for job in live._jobs] == ["live"]
-    assert [job.name for job in maintenance._jobs] == ["directory", "injuries", "backfill"]
+    assert [job.name for job in maintenance._jobs] == [
+        "directory",
+        "injuries",
+        "backfill",
+        "snapshots",
+    ]

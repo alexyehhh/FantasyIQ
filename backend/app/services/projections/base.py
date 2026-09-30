@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -75,6 +75,8 @@ class StatProjection:
     kicks: list[KickBucket] = field(default_factory=list)
     unprojected: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # What the source knew or assumed (model version, settings, news); saved with a snapshot.
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
