@@ -10,6 +10,8 @@ checks that directly.
 
 `build_features` takes history rows (stats filled in) and, when projecting, target rows (stats
 empty, one per player) stacked after them. A target row only ever reads the rows before it.
+Teammate features (`availability.py`) arrive as ready-made columns on `frame`; without them they
+are zero.
 """
 
 from __future__ import annotations
@@ -31,17 +33,52 @@ POSITION_CODES = {
 }  # fmt: skip
 
 
+# The stats whose vacated and returning teammate totals become features (see availability.py): the
+# ones that say how a team's work is shared. A stat a sport doesn't have is skipped.
+CONTEXT_STATS = (
+    "minutes", "points", "rebounds", "assists", "field_goal_attempts",
+    "passing_attempts", "rushing_attempts", "receiving_targets", "receptions",
+)  # fmt: skip
+
+
+# Teammates who compete for the same work: a missing running back's carries go to the other running
+# backs far more than to the receivers.
+POSITION_GROUPS = {
+    "QB": "QB", "RB": "RB", "WR": "WR", "TE": "TE",
+    "PG": "G", "SG": "G", "G": "G", "SF": "F", "PF": "F", "F": "F", "GF": "F",
+    "C": "C", "FC": "C",
+}  # fmt: skip
+
+
+def context_stats(stats: Sequence[str]) -> list[str]:
+    return [s for s in CONTEXT_STATS if s in stats]
+
+
+def context_columns(stats: Sequence[str]) -> list[str]:
+    chosen = context_stats(stats)
+    return (
+        [f"vac__{s}" for s in chosen]
+        + [f"inherit__{s}" for s in chosen]
+        + [f"new_inherit__{s}" for s in chosen]
+        + [f"ret__{s}" for s in chosen]
+        + ["n_absent", "n_returning"]
+    )
+
+
 def feature_names(stats: Sequence[str]) -> list[str]:
     names = []
     for stat in stats:
         names += [f"{stat}__ewm", f"{stat}__m3", f"{stat}__m30", f"{stat}__med8"]
         names += [f"{stat}__last", f"{stat}__std8"]
-    return names + ["n_prior", "days_rest", "is_home", "position_code"]
+    return names + context_columns(stats) + ["n_prior", "days_rest", "is_home", "position_code"]
 
 
 def build_features(frame: pd.DataFrame, stats: Sequence[str]) -> pd.DataFrame:
     """`frame` plus feature columns. Rows must be sorted by player_id then start_time."""
     out = frame.copy()
+    for column in context_columns(stats):
+        if column not in out:  # no team context given: no teammate is known to be missing
+            out[column] = 0.0
     by_player = out["player_id"]
     columns: dict[str, pd.Series] = {}
     for stat in stats:

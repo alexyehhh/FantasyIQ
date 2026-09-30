@@ -16,9 +16,10 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.linear_model import Ridge
 
 from app.ml.dataset import STATS
-from app.ml.features import as_matrix, feature_names
+from app.ml.features import as_matrix, context_stats, feature_names
 
 MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 _POSITION_COLUMN = "position_code"
@@ -30,6 +31,9 @@ _PARAMS: dict[str, Any] = {
     "l2_regularization": 1.0,
     "random_state": 0,
 }
+
+
+_RIDGE_ALPHA = 5.0
 
 
 def _loss(stat: str) -> str:
@@ -50,18 +54,30 @@ class SportModel:
     trained_through: str
     n_rows: int
     metrics: dict[str, Any] = field(default_factory=dict)
+    adjusters: dict[str, Ridge] = field(default_factory=dict)
+
+    def base_lines(self, features: pd.DataFrame) -> pd.DataFrame:
+        """The decaying average of each stat, moved by what teammates being out or back implies."""
+        context = _context_matrix(features, tuple(self.regressors))
+        lines = {}
+        for stat in self.regressors:
+            base = features[f"{stat}__ewm"].fillna(0).to_numpy()
+            if stat in self.adjusters:
+                base = base + context @ self.adjusters[stat].coef_
+            lines[stat] = np.clip(base, 0, None) if _loss(stat) == "poisson" else base
+        return pd.DataFrame(lines, index=features.index)
 
     def predict(self, features: pd.DataFrame) -> pd.DataFrame:
         """Expected stat line for each row of `features` (as built by `build_features`)."""
         matrix = as_matrix(features, tuple(self.regressors))
         weight = MODEL_WEIGHT[self.sport]
+        base = self.base_lines(features)
         predictions = {}
         for stat, reg in self.regressors.items():
             raw = reg.predict(matrix)
             if _loss(stat) == "poisson":
                 raw = np.clip(raw, 0, None)
-            average = features[f"{stat}__ewm"].fillna(0).to_numpy()
-            predictions[stat] = weight * raw + (1 - weight) * average
+            predictions[stat] = weight * raw + (1 - weight) * base[stat].to_numpy()
         return pd.DataFrame(predictions, index=features.index)
 
 
@@ -77,6 +93,31 @@ def train(sport: str, features: pd.DataFrame) -> dict[str, HistGradientBoostingR
         )
         regressors[stat] = reg.fit(matrix, features[stat].to_numpy(dtype="float64"))
     return regressors
+
+
+def _context_features(stats: tuple[str, ...]) -> list[str]:
+    chosen = context_stats(stats)
+    return [f"{kind}__{s}" for s in chosen for kind in ("inherit", "new_inherit", "ret")]
+
+
+def _context_matrix(features: pd.DataFrame, stats: tuple[str, ...]) -> np.ndarray:
+    """The teammate features, with no team context (a traded player's old game) as no news."""
+    return features[_context_features(stats)].fillna(0).to_numpy(dtype="float64")
+
+
+def train_adjusters(sport: str, features: pd.DataFrame) -> dict[str, Ridge]:
+    """For each stat, how much its change from the decaying average follows the teammate features.
+
+    A handful of coefficients per stat, pooled over every player, so they can be learned from the
+    few games where a starter was out, which a tree model with hundreds of splits cannot. Only the
+    coefficients are used (no intercept): with no teammate news the average is left alone."""
+    stats = STATS[sport]
+    context = _context_matrix(features, stats)
+    adjusters = {}
+    for stat in stats:
+        residual = features[stat].to_numpy(dtype="float64") - features[f"{stat}__ewm"].fillna(0)
+        adjusters[stat] = Ridge(alpha=_RIDGE_ALPHA).fit(context, residual.to_numpy())
+    return adjusters
 
 
 def save(model: SportModel, directory: Path = MODEL_DIR) -> Path:

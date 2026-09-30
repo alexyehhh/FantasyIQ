@@ -18,7 +18,8 @@ import pandas as pd
 
 from app.db.session import engine
 from app.ml import evaluate, model
-from app.ml.dataset import STATS, load_history
+from app.ml.availability import Timeline, attach_training_context
+from app.ml.dataset import STATS, load_history, load_team_games
 from app.ml.features import build_features, usable
 from app.services.scoring import default_config
 
@@ -31,11 +32,16 @@ def default_cutoff(sport: str, frame: pd.DataFrame) -> pd.Timestamp:
     return latest["start_time"].quantile(0.7)
 
 
-def run(sport: str, cutoff: pd.Timestamp | None, report: bool, save: bool) -> None:
+def run(
+    sport: str, cutoff: pd.Timestamp | None, report: bool, save: bool, context: bool = True
+) -> None:
     stats = STATS[sport]
     with engine.connect() as conn:
         history = load_history(conn, sport)
+        team_games = load_team_games(conn, sport)
     print(f"{sport}: {len(history)} player-games, {history['player_id'].nunique()} players")
+    if context:
+        history = attach_training_context(history, Timeline(history, team_games, stats), stats)
     features = build_features(history, stats)
     ready = features[usable(features)].copy()
     cutoff = cutoff or default_cutoff(sport, ready)
@@ -44,8 +50,14 @@ def run(sport: str, cutoff: pd.Timestamp | None, report: bool, save: bool) -> No
     print(f"cutoff {cutoff:%Y-%m-%d}: train {len(train_rows)}, test {len(test_rows)}")
 
     fitted = model.train(sport, train_rows)
-    held_out = model.SportModel(sport, fitted, f"{cutoff:%Y-%m-%d}", len(train_rows))
-    predictions = {"model": held_out.predict(test_rows)}
+    adjusters = model.train_adjusters(sport, train_rows)
+    held_out = model.SportModel(
+        sport, fitted, f"{cutoff:%Y-%m-%d}", len(train_rows), adjusters=adjusters
+    )
+    predictions = {
+        "model": held_out.predict(test_rows),
+        "avg+teammates": held_out.base_lines(test_rows),
+    }
     for name in evaluate.BASELINES:
         predictions[name] = evaluate.baseline_lines(test_rows, stats, name)
 
@@ -59,10 +71,10 @@ def run(sport: str, cutoff: pd.Timestamp | None, report: bool, save: bool) -> No
             print(evaluate.stat_mae(test_rows, predictions, stats).to_string())
 
     if save:
-        final = model.train(sport, ready)
         saved = model.SportModel(
-            sport, final, f"{ready['start_time'].max():%Y-%m-%d}", len(ready),
+            sport, model.train(sport, ready), f"{ready['start_time'].max():%Y-%m-%d}", len(ready),
             {"cutoff": f"{cutoff:%Y-%m-%d}", "held_out": table.to_dict("records")},
+            adjusters=model.train_adjusters(sport, ready),
         )  # fmt: skip
         print("saved", model.save(saved))
 
@@ -73,9 +85,12 @@ def main() -> None:
     parser.add_argument("--cutoff", type=datetime.fromisoformat)
     parser.add_argument("--report", action="store_true", help="also print per-stat MAE")
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument(
+        "--no-context", action="store_true", help="leave out the teammate features (to compare)"
+    )
     args = parser.parse_args()
     cutoff = pd.Timestamp(args.cutoff) if args.cutoff else None
-    run(args.sport, cutoff, args.report, not args.no_save)
+    run(args.sport, cutoff, args.report, not args.no_save, not args.no_context)
 
 
 if __name__ == "__main__":
