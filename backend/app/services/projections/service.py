@@ -259,10 +259,34 @@ def _fill(
         )
     result.stats = {stat: round(value, 2) for stat, value in answer.stats.items()}
     result.games_sampled = history[1]
-    result.unprojected = answer.unprojected
+    result.unprojected = _relevant(result, answer.unprojected)
     result.notes.extend(answer.notes)
     if result.injury_status:
         result.notes.append(_UNCERTAIN_NOTE.format(status=result.injury_status))
+
+
+# Stats only a kicker can score: a league that values them says nothing about anyone else.
+_KICKER_ONLY = {
+    "extra_points_made",
+    "extra_points_missed",
+    "extra_point_attempts",
+    "field_goals_made",
+    "field_goals_missed",
+    "field_goal_attempts",
+}
+_KICKER_POSITIONS = {"K", "PK"}
+
+
+def _relevant(result: Projection, unprojected: list[str]) -> list[str]:
+    """The unprojected stats worth warning about for this player: a non-kicker isn't expected to
+    have extra points or field goals, so a source leaving those out isn't a gap."""
+    if (
+        result.kind == "player"
+        and result.sport == "NFL"
+        and result.position not in _KICKER_POSITIONS
+    ):
+        return [stat for stat in unprojected if stat not in _KICKER_ONLY]
+    return unprojected
 
 
 def current_week(db: Session, sport: str, *, now: datetime | None = None) -> int | None:

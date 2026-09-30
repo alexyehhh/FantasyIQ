@@ -473,3 +473,28 @@ def test_recent_form_and_blend_are_not_sources():
 
     assert "recent_form" not in PROVIDERS and "blend" not in PROVIDERS
     assert TeamGameStatsNFL  # (history for a defense's range is still read from its own lines)
+
+
+def test_kicker_only_stats_are_not_reported_as_unprojected_for_other_players(
+    db, league, monkeypatch
+):
+    alpha, *_ = league
+    wes = _player(db, alpha, "Wes Receiver")
+    kip = _player(db, alpha, "Kip Kicker", position="PK")
+    source = install(
+        monkeypatch, {"Wes Receiver": RECEIVER, "Kip Kicker": {"extra_points_made": 2}}
+    )
+    project = source.project
+
+    def leaves_out_what_the_league_scores(db, targets, config):
+        answers = project(db, targets, config)
+        for answer in answers.values():
+            answer.unprojected = ["extra_points_made", "fourth_down_stops", "extra_points_missed"]
+        return answers
+
+    source.project = leaves_out_what_the_league_scores
+
+    results = {r.name: r for r in _run(db, player_ids=[wes.id, kip.id])}
+
+    assert results["Wes Receiver"].unprojected == ["fourth_down_stops"]
+    assert "extra_points_made" in results["Kip Kicker"].unprojected  # a kicker's are real gaps
