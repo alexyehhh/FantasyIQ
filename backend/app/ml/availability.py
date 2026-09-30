@@ -143,6 +143,17 @@ class Timeline:
         )  # fmt: skip
         return taken * np.divide(mine, here, out=np.zeros_like(mine), where=here > 0)
 
+    def _gap(self, player_id: int, recent: dict[int, np.ndarray], gone: set[int]) -> np.ndarray:
+        """How far the player's usual load is below what the newly missing same-position
+        teammates carried (never below zero). A first choice with 3 carries behind a starter with
+        15 has a gap of 12, and in past games such players took about two thirds of it."""
+        mine = recent.get(player_id)
+        group = self.group.get(player_id)
+        if mine is None or not group:
+            return np.zeros(len(self.stats))
+        taken = sum((recent[q] for q in gone if self.group.get(q) == group), np.zeros_like(mine))
+        return np.clip(taken - mine, 0, None)
+
     def _rank(
         self,
         player_id: int,
@@ -194,6 +205,8 @@ class Timeline:
                     f"top_new_inherit__{s}": float(v)
                     for s, v in zip(self.stats, first, strict=True)
                 }
+                gap = self._gap(player_id, recent, gone) if rank == 1 else np.zeros_like(inherited)
+                row |= {f"top_gap__{s}": float(v) for s, v in zip(self.stats, gap, strict=True)}
         row["group_rank"] = rank
         row |= {f"ret__{s}": float(v) for s, v in zip(self.stats, back, strict=True)}
         row["n_absent"] = float(len(missing))

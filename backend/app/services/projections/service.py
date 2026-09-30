@@ -39,9 +39,10 @@ Status = Literal["ok", "out", "no_game", "unavailable"]
 
 # Injury statuses (as ESPN words them) that mean the player won't play.
 _OUT_STATUSES = {"out", "injured reserve", "ir", "suspended", "suspension"}
-# Left out of the top lists as well: doubtful players almost never play, so ranking them at a
-# full-health projection would only mislead. (When compared by name they're projected, flagged.)
-_LEFT_OUT_OF_TOP = _OUT_STATUSES | {"doubtful"}
+# Doubtful players almost never play: they get no projection (unavailable, with the reason) and
+# are left out of the top lists, since a full-health number for them would only mislead.
+_DOUBTFUL = "doubtful"
+_LEFT_OUT_OF_TOP = _OUT_STATUSES | {_DOUBTFUL}
 _UNCERTAIN_NOTE = "Listed {status}; the projection assumes they play."
 
 
@@ -179,6 +180,12 @@ def project(
             result.status = "out"
             result.fantasy_points = 0.0
             result.notes.append(f"Listed {result.injury_status}.")
+            continue
+        if (result.injury_status or "").lower() == _DOUBTFUL:
+            result.status = "unavailable"
+            result.notes.append(
+                f"Listed {result.injury_status}: unlikely to play, so no projection."
+            )
             continue
         found = _find_game(db, team, sport, week, now) if team else None
         if found is None:

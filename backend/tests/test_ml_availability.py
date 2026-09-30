@@ -127,3 +127,21 @@ def test_a_game_whose_box_score_is_unavailable_is_left_out_of_the_schedule():
     # empty game that would make every player look absent.
     assert [g.game_id for g in timeline.teams[TEAM]] == [1, 2, 3, 4]
     assert all(g.members for g in timeline.teams[TEAM])
+
+
+def test_only_the_first_choice_has_a_gap_to_close_behind_a_departed_starter():
+    # Three backs: the starter (15 carries) is out, then a backup with 5 and a third with 2.
+    rows = []
+    for game in (1, 2, 3, 4):
+        if game != 4:
+            rows.append(_row(STARTER, game, "RB", rushes=15))
+        rows += [_row(BACKUP, game, "RB", rushes=5), _row(OTHER_TEAM_RB, game, "RB", rushes=2)]
+    history = pd.DataFrame(rows)
+    timeline = Timeline(history, _schedule([1, 2, 3, 4]), STATS_NFL)
+
+    first = timeline.features_for(BACKUP, TEAM, "2026", 3)
+    third = timeline.features_for(OTHER_TEAM_RB, TEAM, "2026", 3)
+
+    assert first["group_rank"] == 1 and third["group_rank"] == 2
+    assert first["top_gap__rushing_attempts"] == pytest.approx(10)  # 15 carried, he usually has 5
+    assert third["top_gap__rushing_attempts"] == 0

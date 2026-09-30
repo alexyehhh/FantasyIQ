@@ -402,7 +402,7 @@ def test_top_players_leaves_out_anyone_ruled_out_or_doubtful_but_keeps_questiona
     assert names == ["Wanda Wideout", "Wes Receiver", "Quinn Questionable"] and total == 3
 
 
-def test_a_doubtful_player_named_in_a_comparison_is_still_projected_with_a_warning(
+def test_a_doubtful_player_named_in_a_comparison_is_unavailable_with_the_reason(
     db, league, monkeypatch
 ):
     alpha, *_ = league
@@ -411,7 +411,8 @@ def test_a_doubtful_player_named_in_a_comparison_is_still_projected_with_a_warni
 
     (result,) = _run(db, player_ids=[dan.id])
 
-    assert result.status == "ok" and any("Doubtful" in note for note in result.notes)
+    assert result.status == "unavailable" and result.fantasy_points is None
+    assert any("Doubtful" in note and "unlikely to play" in note for note in result.notes)
 
 
 def test_top_players_asks_the_source_for_the_current_week_and_the_slots_positions(

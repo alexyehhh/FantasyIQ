@@ -100,7 +100,7 @@ def _context_features(stats: tuple[str, ...]) -> list[str]:
     return [
         f"{kind}__{s}"
         for s in chosen
-        for kind in ("inherit", "new_inherit", "top_new_inherit", "ret")
+        for kind in ("inherit", "new_inherit", "top_new_inherit", "top_gap", "ret")
     ]
 
 
