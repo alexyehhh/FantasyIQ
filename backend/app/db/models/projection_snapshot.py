@@ -28,7 +28,13 @@ class ProjectionSnapshot(Base):
     __tablename__ = "projection_snapshots"
     __table_args__ = (
         UniqueConstraint(
-            "source", "kind", "entity_id", "game_id", "captured_at", name="uq_projection_snapshot"
+            "source",
+            "kind",
+            "entity_id",
+            "game_id",
+            "origin",
+            "captured_at",
+            name="uq_projection_snapshot",
         ),
         Index("ix_projection_snapshots_game_source", "game_id", "source"),
     )
