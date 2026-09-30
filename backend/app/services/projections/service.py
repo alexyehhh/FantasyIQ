@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Game, Player, Team
 from app.services import players as players_service
-from app.services.projections import history
+from app.services.projections import fantasyiq, history  # noqa: F401  (registers the source)
 from app.services.projections.base import (
     KickBucket,
     Kind,

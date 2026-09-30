@@ -89,3 +89,19 @@ def save(model: SportModel, directory: Path = MODEL_DIR) -> Path:
 def load(sport: str, directory: Path = MODEL_DIR) -> SportModel | None:
     path = directory / f"{sport.lower()}.joblib"
     return joblib.load(path) if path.exists() else None
+
+
+_cache: dict[str, tuple[float, SportModel]] = {}
+
+
+def load_cached(sport: str, directory: Path = MODEL_DIR) -> SportModel | None:
+    """`load`, but reading the file again only when it has been retrained since."""
+    path = directory / f"{sport.lower()}.joblib"
+    if not path.exists():
+        return None
+    modified = path.stat().st_mtime
+    cached = _cache.get(str(path))
+    if cached is None or cached[0] != modified:
+        cached = (modified, joblib.load(path))
+        _cache[str(path)] = cached
+    return cached[1]

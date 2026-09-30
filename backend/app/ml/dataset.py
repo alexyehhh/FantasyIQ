@@ -7,6 +7,8 @@ player's current team played in the game and is left empty otherwise.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -54,8 +56,11 @@ STATS: dict[str, tuple[str, ...]] = {"NFL": NFL_STATS, "NBA": NBA_STATS}
 _TABLES = {"NFL": "player_game_stats_nfl", "NBA": "player_game_stats"}
 
 
-def load_history(conn: Connection, sport: str) -> pd.DataFrame:
-    """Every finished game's stat line for the sport's modelled positions, oldest first.
+def load_history(
+    conn: Connection, sport: str, player_ids: Sequence[int] | None = None
+) -> pd.DataFrame:
+    """Every finished game's stat line for the sport's modelled positions (only `player_ids`, if
+    given), oldest first.
 
     Columns: player_id, game_id, start_time, season, week, position, is_home, then the stats.
     NBA games a player sat out (no minutes) are dropped: a projection is for a player who plays."""
@@ -71,9 +76,16 @@ def load_history(conn: Connection, sport: str) -> pd.DataFrame:
         JOIN players p ON p.id = s.player_id
         WHERE g.sport = :sport AND g.status = 'final' AND g.stats_final
           AND p.position = ANY(:positions)
+          AND (:all_players OR s.player_id = ANY(:player_ids))
         """
     )
-    frame = pd.read_sql(query, conn, params={"sport": sport, "positions": list(POSITIONS[sport])})
+    params = {
+        "sport": sport,
+        "positions": list(POSITIONS[sport]),
+        "all_players": player_ids is None,
+        "player_ids": list(player_ids or ()),
+    }
+    frame = pd.read_sql(query, conn, params=params)
     if sport == "NBA":
         frame = frame[frame["minutes"] > 0]
     frame["position"] = frame["position"].replace(POSITION_ALIASES)
