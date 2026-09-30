@@ -62,12 +62,15 @@ def load_history(
     """Every finished game's stat line for the sport's modelled positions (only `player_ids`, if
     given), oldest first.
 
-    Columns: player_id, game_id, start_time, season, week, position, is_home, then the stats.
+    Columns: player_id, game_id, start_time, season, week, position, team_id, is_home, then the
+    stats. `team_id` is the player's current team when it played in the game, else empty.
     NBA games a player sat out (no minutes) are dropped: a projection is for a player who plays."""
     stats = ", ".join(f"s.{name}" for name in STATS[sport])
     query = text(
         f"""
         SELECT s.player_id, s.game_id, g.start_time, g.season, g.week, p.position,
+               CASE WHEN p.team_id IN (g.home_team_id, g.away_team_id)
+                    THEN p.team_id END AS team_id,
                CASE WHEN p.team_id = g.home_team_id THEN 1
                     WHEN p.team_id = g.away_team_id THEN 0 END AS is_home,
                {stats}
@@ -92,3 +95,19 @@ def load_history(
     frame["is_home"] = frame["is_home"].astype("float64")
     frame["week"] = frame["week"].astype("float64")
     return frame.sort_values(["player_id", "start_time"]).reset_index(drop=True)
+
+
+def load_team_games(conn: Connection, sport: str) -> pd.DataFrame:
+    """One row per team per finished game with a complete box score: team_id, game_id, season,
+    start_time, oldest first. The order of a team's rows is its schedule, which is what says which
+    of its players missed a game."""
+    query = text(
+        """
+        SELECT t.team_id, g.id AS game_id, g.season, g.start_time
+        FROM games g
+        CROSS JOIN LATERAL (VALUES (g.home_team_id), (g.away_team_id)) AS t(team_id)
+        WHERE g.sport = :sport AND g.status = 'final' AND g.stats_final
+        """
+    )
+    frame = pd.read_sql(query, conn, params={"sport": sport})
+    return frame.sort_values(["team_id", "start_time"]).reset_index(drop=True)

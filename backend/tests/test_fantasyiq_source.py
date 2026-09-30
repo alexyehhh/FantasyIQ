@@ -37,6 +37,7 @@ def db():
 @pytest.fixture(autouse=True)
 def trained(monkeypatch):
     monkeypatch.setattr(fantasyiq.ml_model, "load_cached", lambda sport: AverageOfLastThree())
+    fantasyiq._data_cache.clear()  # each test has its own games, which the cache can't tell apart
 
 
 def _team(db, name, abbreviation):
@@ -163,3 +164,33 @@ def test_ranking_orders_the_weeks_players_by_projected_points(db, league):
     assert [c.entity_id for c in rank(["WR"])] == [star.id, role.id]
     assert rank(["PK"]) == []
     assert rank(None)[0].points == 9.0
+
+
+class RushesWhatTeammatesLeave:
+    """Projects the rushing attempts a player inherits: shows injury news reaching the model."""
+
+    trained_through = "2026-01-01"
+
+    def predict(self, features):
+        lines = {s: features[f"{s}__m3"] for s in STATS["NFL"]}
+        lines["rushing_attempts"] = features["inherit__rushing_attempts"].fillna(0)
+        return pd.DataFrame(lines, index=features.index)
+
+
+def test_a_teammate_listed_out_raises_the_backups_workload(db, league, monkeypatch):
+    alpha, _, past, _ = league
+    starter = _player(db, alpha, "Sid Starter", position="RB")
+    backup = _player(db, alpha, "Ben Backup", position="RB")
+    for game in past:
+        db.add(PlayerGameStatsNFL(player_id=starter.id, game_id=game.id, rushing_attempts=15))
+        db.add(PlayerGameStatsNFL(player_id=backup.id, game_id=game.id, rushing_attempts=5))
+    db.flush()
+    monkeypatch.setattr(fantasyiq.ml_model, "load_cached", lambda sport: RushesWhatTeammatesLeave())
+
+    (healthy,) = _project(db, player_ids=[backup.id])
+    starter.injury_status = "Out"
+    db.flush()
+    (hurt,) = _project(db, player_ids=[backup.id])
+
+    assert healthy.stats["rushing_attempts"] == 0
+    assert hurt.stats["rushing_attempts"] == pytest.approx(15)  # the whole load: no other back

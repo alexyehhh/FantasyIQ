@@ -16,12 +16,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Game, Player
 from app.ml import model as ml_model
-from app.ml.dataset import POSITION_ALIASES, POSITIONS, STATS, load_history
+from app.ml.availability import EXPECTED_OUT, Timeline
+from app.ml.dataset import POSITION_ALIASES, POSITIONS, STATS, load_history, load_team_games
 from app.ml.features import MIN_PRIOR_GAMES, POSITION_CODES, build_features
 from app.services.projections.base import (
     Key,
@@ -50,6 +51,26 @@ class _Row:
     is_home: bool
 
 
+# Per sport: (how many finished games there were, the latest one) -> all history and who played
+# with whom. Rebuilt only when a game has finished since, because every projection reads it.
+_data_cache: dict[str, tuple[tuple[int, object], pd.DataFrame, Timeline]] = {}
+
+
+def _data(db: Session, sport: str) -> tuple[pd.DataFrame, Timeline]:
+    key = db.execute(
+        select(func.count(Game.id), func.max(Game.start_time)).where(
+            Game.sport == sport, Game.status == "final", Game.stats_final.is_(True)
+        )
+    ).one()
+    cached = _data_cache.get(sport)
+    if cached is None or cached[0] != tuple(key):
+        history = load_history(db.connection(), sport)
+        timeline = Timeline(history, load_team_games(db.connection(), sport), STATS[sport])
+        cached = (tuple(key), history, timeline)
+        _data_cache[sport] = cached
+    return cached[1], cached[2]
+
+
 def _position(player: Player) -> str | None:
     position = POSITION_ALIASES.get(player.position or "", player.position)
     return position if position in POSITION_CODES else None
@@ -60,8 +81,9 @@ class FantasyIQProvider:
     label = "FantasyIQ model"
     description = (
         "Our own gradient boosting model, trained on two seasons of NBA and NFL box scores. It "
-        "projects from a player's recent games, home or away and rest; it does not use the "
-        "opponent yet. NBA players and NFL QB, RB, WR and TE only."
+        "projects from a player's recent games, home or away, rest and which teammates are out "
+        "(a backup's workload rises when the starter is hurt); it does not use the opponent yet. "
+        "NBA players and NFL QB, RB, WR and TE only."
     )
     sports = frozenset({"NBA", "NFL"})
 
@@ -87,11 +109,14 @@ class FantasyIQProvider:
         if not eligible:
             return results
 
-        history = load_history(db.connection(), sport, [r.player.id for r in eligible])
+        everyone, timeline = _data(db, sport)
+        ids = {r.player.id for r in eligible}
+        history = everyone[everyone["player_id"].isin(ids)]
         starts = {r.player.id: r.game.start_time for r in eligible}
         # Only games before the one being projected, so a game already played is projected as it
         # would have been beforehand.
         history = history[history["start_time"] < history["player_id"].map(starts)]
+        out = _expected_out(db, {r.player.team_id for r in eligible})
         targets = pd.DataFrame(
             [
                 {
@@ -99,6 +124,13 @@ class FantasyIQProvider:
                     "start_time": pd.Timestamp(r.game.start_time),
                     "position": _position(r.player),
                     "is_home": float(r.is_home),
+                    **timeline.features_for(
+                        r.player.id,
+                        r.player.team_id,
+                        r.game.season,
+                        timeline.position_before(r.player.team_id, pd.Timestamp(r.game.start_time)),
+                        out.get(r.player.team_id, set()),
+                    ),
                 }
                 for r in eligible
             ]
@@ -197,6 +229,20 @@ class FantasyIQProvider:
                 points = score_expected_player(config, answer.stats).points
                 ranked.append(RankedCandidate("player", player_id, points, injuries[player_id]))
         return sorted(ranked, key=lambda c: -c.points)
+
+
+def _expected_out(db: Session, team_ids: set[int | None]) -> dict[int, set[int]]:
+    """Each team's players currently listed out, doubtful or suspended."""
+    rows = db.execute(
+        select(Player.team_id, Player.id).where(
+            Player.team_id.in_([t for t in team_ids if t is not None]),
+            func.lower(Player.injury_status).in_(EXPECTED_OUT),
+        )
+    )
+    out: dict[int, set[int]] = {}
+    for team_id, player_id in rows:
+        out.setdefault(team_id, set()).add(player_id)
+    return out
 
 
 def _covered(sport: str, wanted: Sequence[str]) -> set[str]:
