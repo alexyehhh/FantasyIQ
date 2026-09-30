@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from app.ml import evaluate, model
 from app.ml.dataset import STATS
@@ -63,3 +64,42 @@ def test_split_by_time_never_mixes_the_periods():
     cutoff = pd.Timestamp("2025-01-25")
     before, after = evaluate.split_by_time(frame, cutoff)
     assert frame[before]["start_time"].max() < cutoff <= frame[after]["start_time"].min()
+
+
+def _features(ewm, gap):
+    return pd.DataFrame({"rushing_attempts__ewm": ewm, "top_gap__rushing_attempts": gap})
+
+
+def test_a_first_choice_backup_is_raised_towards_the_starters_workload(monkeypatch):
+    monkeypatch.setattr(model.get_settings(), "projection_first_choice_share", 0.9)
+    nfl = model.SportModel("NFL", {}, "2026-01-01", 0)
+    lines = pd.DataFrame(
+        {"rushing_attempts": [8.0, 8.0], "rushing_yards": [32.0, 32.0], "receptions": [2.0, 2.0]}
+    )
+
+    filled = nfl._fill_the_starters_role(lines, _features([6.0, 6.0], [9.0, 0.0]))
+
+    # 6 + 0.9 * 9 = 14.1 carries; the yards move with the carries, receptions are left alone.
+    assert filled.loc[0, "rushing_attempts"] == pytest.approx(14.1)
+    assert filled.loc[0, "rushing_yards"] == pytest.approx(32 * 14.1 / 8)
+    assert filled.loc[0, "receptions"] == 2.0
+    assert filled.loc[1].to_dict() == lines.loc[1].to_dict()  # no gap: unchanged
+
+
+def test_the_raise_never_lowers_a_projection_and_can_be_turned_off(monkeypatch):
+    nfl = model.SportModel("NFL", {}, "2026-01-01", 0)
+    lines = pd.DataFrame({"rushing_attempts": [15.0], "rushing_yards": [60.0]})
+
+    monkeypatch.setattr(model.get_settings(), "projection_first_choice_share", 0.9)
+    assert nfl._fill_the_starters_role(lines, _features([6.0], [9.0])).equals(lines)  # 14.1 < 15
+
+    monkeypatch.setattr(model.get_settings(), "projection_first_choice_share", 0.0)
+    assert nfl._fill_the_starters_role(lines, _features([1.0], [20.0])).equals(lines)
+
+
+def test_the_nba_is_left_to_the_model(monkeypatch):
+    monkeypatch.setattr(model.get_settings(), "projection_first_choice_share", 1.0)
+    nba = model.SportModel("NBA", {}, "2026-01-01", 0)
+    lines = pd.DataFrame({"rushing_attempts": [8.0]})
+
+    assert nba._fill_the_starters_role(lines, _features([6.0], [9.0])).equals(lines)

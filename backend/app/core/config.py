@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     sleeper_players_ttl_seconds: float = 6 * 3600.0
     sleeper_cache_ttl_seconds: float = 900.0
 
+    # Our projection model (app/ml): how far a first-choice backup behind a newly out NFL starter is
+    # projected to close the gap to the starter's workload, from 0 (leave it to the model, which
+    # learned about two thirds) to 1 (the full starter role, as Sleeper's projections assume).
+    projection_first_choice_share: float = 0.9
+
     # The AI Analyst (Milestone 9, app/ai/) calls Gemini for tool-calling and explanations.
     # "gemini-flash-latest" tracks Google's current default Flash model, so this doesn't need
     # bumping as newer ones ship.

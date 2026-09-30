@@ -18,6 +18,7 @@ import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
 
+from app.core.config import get_settings
 from app.ml.dataset import STATS
 from app.ml.features import as_matrix, context_stats, feature_names
 
@@ -45,6 +46,26 @@ def _loss(stat: str) -> str:
 # NFL has about 5k, and unshrunk the model did no better than the average on held-out games, so
 # half of it is the average. Chosen from the held-out comparison in `evaluate.py`.
 MODEL_WEIGHT = {"NBA": 1.0, "NFL": 0.5}
+
+
+# A first-choice backup behind a newly out starter is projected to fill at least
+# `projection_first_choice_share` of the way from his own usual workload to the starter's (see
+# config.py). It is a chosen setting, not a fitted one, and leans towards Sleeper, whose projections
+# put such backups in the starter's role: in past games they took about two thirds of the gap, so
+# the higher the setting the more it overshoots history. The NFL only; the NBA keeps what the model
+# learned.
+_FLOORED_SPORTS = {"NFL"}
+# The workload stat that is floored, and the stats that move with it in proportion.
+_ROLE_STATS = {
+    "rushing_attempts": ("rushing_yards", "rushing_touchdowns"),
+    "receiving_targets": ("receptions", "receiving_yards", "receiving_touchdowns"),
+    "passing_attempts": (
+        "passing_completions",
+        "passing_yards",
+        "passing_touchdowns",
+        "interceptions",
+    ),
+}
 
 
 @dataclass
@@ -78,7 +99,28 @@ class SportModel:
             if _loss(stat) == "poisson":
                 raw = np.clip(raw, 0, None)
             predictions[stat] = weight * raw + (1 - weight) * base[stat].to_numpy()
-        return pd.DataFrame(predictions, index=features.index)
+        lines = pd.DataFrame(predictions, index=features.index)
+        return self._fill_the_starters_role(lines, features)
+
+    def _fill_the_starters_role(self, lines: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+        """Raise a first-choice backup's workload to the configured share of the way to the
+        starter's, and scale the stats that follow from it (yards, touchdowns) alike."""
+        share = get_settings().projection_first_choice_share
+        if self.sport not in _FLOORED_SPORTS or share <= 0:
+            return lines
+        lines = lines.copy()
+        for load, followers in _ROLE_STATS.items():
+            gap = features.get(f"top_gap__{load}")
+            if load not in lines or gap is None:
+                continue
+            target = features[f"{load}__ewm"].fillna(0) + share * gap.fillna(0)
+            floored = np.maximum(lines[load], target)
+            factor = np.divide(floored, lines[load], out=np.ones(len(lines)), where=lines[load] > 0)
+            lines[load] = floored
+            for stat in followers:
+                if stat in lines:
+                    lines[stat] = lines[stat] * factor
+        return lines
 
 
 def train(sport: str, features: pd.DataFrame) -> dict[str, HistGradientBoostingRegressor]:
