@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from math import sqrt
 from typing import Literal
 
@@ -36,6 +36,7 @@ from app.db.models import (
     PlayerGameStats,
     PlayerGameStatsNFL,
     ProjectionSnapshot,
+    Team,
     TeamGameStatsNFL,
 )
 from app.ml.features import POSITION_GROUPS
@@ -384,3 +385,116 @@ def compute(
             "Only one source has saved projections, so there is nothing to compare."
         )
     return report
+
+
+@dataclass
+class PlayerGameRow:
+    """One player's game: what happened and what each source projected before kickoff."""
+
+    game_id: int
+    player_id: int
+    player_name: str
+    position: str | None
+    team: str | None
+    opponent: str | None
+    home: bool
+    season: str
+    week: int | None
+    start_time: datetime
+    played: bool
+    actual: float | None  # None when the player didn't play
+    projected: dict[str, float]  # a source that saved nothing for this game is left out
+
+
+def player_games(
+    db: Session,
+    *,
+    sport: str,
+    config: ScoringConfig,
+    player_id: int | None = None,
+    origin: Origin = "live",
+    limit: int = 20,
+) -> list[PlayerGameRow]:
+    """Finished games with saved projections, newest first, each with the real fantasy points and
+    every source's last pre-kickoff projection. For one player, or (without `player_id`) for
+    everyone in the most recent games. Unlike `compute`, a game is listed even when only some of
+    the sources projected it."""
+    has_snapshot = select(ProjectionSnapshot.game_id).where(
+        ProjectionSnapshot.sport == sport,
+        ProjectionSnapshot.kind == "player",
+        ProjectionSnapshot.origin == origin,
+    )
+    if player_id is not None:
+        has_snapshot = has_snapshot.where(ProjectionSnapshot.entity_id == player_id)
+    query = (
+        select(Game)
+        .where(
+            Game.sport == sport,
+            Game.status == "final",
+            Game.stats_final.is_(True),
+            Game.id.in_(has_snapshot),
+        )
+        .order_by(Game.start_time.desc())
+        .limit(limit if player_id is not None else 16)  # one player's history, or the latest slate
+    )
+    games = {g.id: g for g in db.scalars(query)}
+    if not games:
+        return []
+    snapshots = {
+        k: by
+        for k, by in _latest_before_kickoff(db, sport, origin, games).items()
+        if k[0] == "player" and (player_id is None or k[1] == player_id)
+    }
+    ids = {k[1] for k in snapshots}
+    game_ids = {k[2] for k in snapshots}
+    players = {p.id: p for p in db.scalars(select(Player).where(Player.id.in_(ids)))}
+    teams = {t.id: t.abbreviation for t in db.scalars(select(Team).where(Team.sport == sport))}
+    model = _STATS_MODEL[sport]
+    stats_rows = {
+        (r.player_id, r.game_id): r
+        for r in db.scalars(
+            select(model).where(model.player_id.in_(ids), model.game_id.in_(game_ids))
+        )
+    }
+    kicks: dict[tuple[int, int], list[tuple[int, str]]] = defaultdict(list)
+    if sport == "NFL":
+        for kick in db.scalars(
+            select(FieldGoalKick).where(
+                FieldGoalKick.player_id.in_(ids), FieldGoalKick.game_id.in_(game_ids)
+            )
+        ):
+            kicks[(kick.player_id, kick.game_id)].append((kick.distance, kick.result))
+
+    rows: list[PlayerGameRow] = []
+    for (_, pid, game_id), by_source in snapshots.items():
+        player, game = players.get(pid), games[game_id]
+        if player is None:
+            continue
+        stats_row = stats_rows.get((pid, game_id))
+        played = stats_row is not None and (sport != "NBA" or (stats_row.minutes or 0) > 0)
+        home = player.team_id == game.home_team_id
+        rows.append(
+            PlayerGameRow(
+                game_id=game_id,
+                player_id=pid,
+                player_name=player.name,
+                position=player.position,
+                team=teams.get(player.team_id),
+                opponent=teams.get(game.away_team_id if home else game.home_team_id),
+                home=home,
+                season=game.season,
+                week=game.week,
+                start_time=game.start_time,
+                played=played,
+                actual=(
+                    score_player_game(
+                        config, serialize_stats_row(stats_row), kicks.get((pid, game_id), [])
+                    )
+                    if played and stats_row is not None
+                    else None
+                ),
+                projected={s: _projected_points(config, snap) for s, snap in by_source.items()},
+            )
+        )
+    rows.sort(key=lambda r: (r.start_time, r.actual or 0.0), reverse=True)
+    return rows[:100]

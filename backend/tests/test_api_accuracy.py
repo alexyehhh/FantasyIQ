@@ -100,3 +100,24 @@ def test_a_bad_scoring_config_is_a_422(client):
     response = client.get("/api/v1/accuracy", params={"sport": "NFL", "scoring": "nonsense"})
 
     assert response.status_code == 422
+
+
+def test_lists_a_players_actual_points_beside_each_sources_projection(client, played_game, db):
+    wes = db.query(Player).filter_by(name="Wes Receiver").one()
+
+    body = client.get(
+        "/api/v1/accuracy/players", params={"sport": "NFL", "player_id": wes.id}
+    ).json()
+
+    [item] = body["items"]
+    assert item["player_name"] == "Wes Receiver" and item["week"] == 4
+    assert item["team"] == "ALP" and item["opponent"] == "BRV" and item["home"] is True
+    assert item["played"] is True and item["actual"] == pytest.approx(11.0)
+    assert item["projected"] == {"sleeper": pytest.approx(11.0), "fantasyiq": pytest.approx(9.0)}
+
+
+def test_without_a_player_it_lists_the_latest_games(client, played_game):
+    body = client.get("/api/v1/accuracy/players", params={"sport": "NFL"}).json()
+
+    assert [i["player_name"] for i in body["items"]] == ["Wes Receiver"]
+    assert client.get("/api/v1/accuracy/players", params={"sport": "NBA"}).json()["items"] == []

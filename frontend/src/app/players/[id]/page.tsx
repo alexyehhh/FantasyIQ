@@ -2,10 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import LiveRefresh from "@/components/LiveRefresh";
 import InjuryNote from "@/components/InjuryNote";
+import PlayerAccuracy from "@/components/PlayerAccuracy";
 import PlayerHero from "@/components/PlayerHero";
 import PlayerStats from "@/components/PlayerStats";
 import {
   getPlayer,
+  getPlayerAccuracy,
   getPlayerSchedule,
   getPlayerSeason,
   getPlayerStats,
@@ -32,18 +34,20 @@ export default async function PlayerDetailPage({
     notFound();
   }
 
-  const [stats, schedule, scoring, season] = await Promise.all([
+  const [stats, schedule, scoring, season, accuracy] = await Promise.all([
     getPlayerStats(playerId, GAME_LOG_LIMIT, "current"),
     getPlayerSchedule(playerId),
     getScoringPreset(player.sport),
     getPlayerSeason(playerId),
+    // The accuracy section is a bonus: a failure here shouldn't take the whole page down.
+    getPlayerAccuracy(playerId, player.sport).catch(() => []),
   ]);
 
   // While a game is on (or about to start), keep the page's stats current without a reload.
   const live = hasLiveGame(schedule ?? [], Date.now());
 
   return (
-    <main className="mx-auto max-w-[1120px] px-4 pb-14 pt-6">
+    <main className="mx-auto max-w-[1760px] px-4 pb-14 pt-6">
       <div className="mb-3.5 flex items-center justify-between gap-3">
         <Link
           href="/players"
@@ -77,6 +81,7 @@ export default async function PlayerDetailPage({
         schedule={schedule ?? []}
         byeWeek={player.team?.bye_week ?? null}
         scoring={scoring}
+        accuracy={accuracy.length > 0 ? <PlayerAccuracy games={accuracy} /> : null}
       />
     </main>
   );

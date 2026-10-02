@@ -1,12 +1,9 @@
 /**
- * The logic behind the accuracy page: naming and coloring the sources, turning the API's report
- * into chart rows, and saying in words who is closer (or that there isn't enough data to say).
+ * The logic behind a player's projection accuracy: naming and coloring the sources, the miss on
+ * each game, and averaging the misses to say which source was closer.
  */
 
-import type { AccuracyResponse, Sport } from "./api";
-
-/** Below this many compared player-games a report can't say which source is better. */
-export const MIN_SAMPLE = 50;
+import type { AccuracyPlayerGame } from "./api";
 
 const LABELS: Record<string, string> = {
   fantasyiq: "FantasyIQ model",
@@ -18,8 +15,8 @@ export function sourceLabel(name: string): string {
 }
 
 /**
- * A source's color, fixed by who it is and never by its rank, so filtering never repaints it: our
- * model is the app's violet and every outside source the orange (only one is compared today).
+ * A source's color, fixed by who it is and never by its rank: our model is the app's violet and
+ * every outside source the orange.
  */
 export function sourceColor(name: string): string {
   return name === "fantasyiq" ? "var(--series-model)" : "var(--series-other)";
@@ -29,11 +26,6 @@ export function sourceColor(name: string): string {
 export function orderedSources(sources: string[]): string[] {
   return [...sources].sort((a, b) => Number(b === "fantasyiq") - Number(a === "fantasyiq") || a.localeCompare(b));
 }
-
-export const POSITION_FILTERS: Record<Sport, string[]> = {
-  NFL: ["QB", "RB", "WR", "TE", "K", "DEF"],
-  NBA: ["G", "F", "C"],
-};
 
 /** Fantasy points with one decimal, "—" when there is nothing to show. */
 export function formatMiss(value: number | null | undefined): string {
@@ -46,61 +38,58 @@ export function formatBias(value: number): string {
   return `${value > 0 ? "+" : "−"}${Math.abs(value).toFixed(1)}`;
 }
 
-export function formatCorrelation(value: number | null | undefined): string {
-  return value == null ? "—" : value.toFixed(2);
+/** A source's miss on one game, projected minus actual: positive ran high. Null with no result. */
+export function gameMiss(game: AccuracyPlayerGame, source: string): number | null {
+  const projected = game.projected[source];
+  return game.actual == null || projected === undefined ? null : projected - game.actual;
 }
 
-export interface ChartRow {
-  key: string;
-  label: string;
+/** "Week 4" for the NFL, the date for the NBA. */
+export function gameLabel(game: AccuracyPlayerGame): string {
+  if (game.week != null) return `Week ${game.week}`;
+  return new Date(game.start_time).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/** The sources that project a game, ours first, for a table's columns. */
+export function projectingSources(games: AccuracyPlayerGame[]): string[] {
+  return orderedSources([...new Set(games.flatMap((game) => Object.keys(game.projected)))]);
+}
+
+export interface SourceAverage {
+  source: string;
+  /** Average size of the miss in points: lower is better. */
+  mae: number;
+  /** Average of projected minus actual: positive means it ran high. */
+  bias: number;
+}
+
+export interface PlayerSummary {
+  /** Games the averages cover. */
   n: number;
-  [source: string]: number | string;
+  averages: SourceAverage[];
+  /** The source with the smallest average miss, null when there is nothing to compare or a tie. */
+  best: string | null;
 }
 
-/** One row per week, each source's average miss under its own name, for the line chart. */
-export function chartRows(report: AccuracyResponse): ChartRow[] {
-  return report.series.map((point) => ({
-    key: point.key,
-    label: point.label,
-    n: point.n,
-    ...point.mae,
-  }));
-}
-
-export interface Verdict {
-  kind: "empty" | "thin" | "closer" | "tie";
-  text: string;
-}
-
-/** Who was closer overall, only when there is enough data to say. */
-export function verdict(report: AccuracyResponse): Verdict {
-  if (report.compared === 0) {
+/**
+ * Average each source's miss over the games the player played. Only games every source projected
+ * count, so no source is judged on easier ones than another.
+ */
+export function summarize(games: AccuracyPlayerGame[]): PlayerSummary {
+  const sources = projectingSources(games);
+  const scored = games.filter(
+    (game) => game.actual != null && sources.every((source) => gameMiss(game, source) !== null),
+  );
+  const averages = sources.map((source) => {
+    const misses = scored.map((game) => gameMiss(game, source) as number);
+    const total = (values: number[]) => values.reduce((sum, value) => sum + value, 0);
     return {
-      kind: "empty",
-      text: "No finished games have saved projections yet. They are saved before kickoff, so this fills in as games are played.",
+      source,
+      mae: scored.length ? total(misses.map(Math.abs)) / scored.length : 0,
+      bias: scored.length ? total(misses) / scored.length : 0,
     };
-  }
-  const sources = orderedSources(Object.keys(report.overall));
-  if (!report.enough_data) {
-    return {
-      kind: "thin",
-      text: `Only ${report.compared} player-games so far. Under ${MIN_SAMPLE} is too few to say which source is better.`,
-    };
-  }
-  if (sources.length < 2) {
-    return { kind: "thin", text: "Only one source has saved projections, so there is nothing to compare." };
-  }
-  const ranked = [...sources].sort((a, b) => report.overall[a].mae - report.overall[b].mae);
-  const [best, next] = ranked;
-  const gap = report.overall[next].mae - report.overall[best].mae;
-  if (gap < 0.05) {
-    return {
-      kind: "tie",
-      text: `${sourceLabel(best)} and ${sourceLabel(next)} are tied, both missing by about ${formatMiss(report.overall[best].mae)} points on average.`,
-    };
-  }
-  return {
-    kind: "closer",
-    text: `${sourceLabel(best)} is closer: it misses by ${formatMiss(report.overall[best].mae)} points on average, ${formatMiss(gap)} fewer than ${sourceLabel(next)}.`,
-  };
+  });
+  const ranked = [...averages].sort((a, b) => a.mae - b.mae);
+  const clear = scored.length > 0 && ranked.length > 1 && ranked[1].mae - ranked[0].mae >= 0.05;
+  return { n: scored.length, averages, best: clear ? ranked[0].source : null };
 }

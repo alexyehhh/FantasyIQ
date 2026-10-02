@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import PlayerDetailPage from "./page";
 import {
   getPlayer,
+  getPlayerAccuracy,
   getPlayerSchedule,
   getPlayerSeason,
   getPlayerStats,
@@ -20,6 +21,7 @@ import {
 
 jest.mock("@/lib/api", () => ({
   getPlayer: jest.fn(),
+  getPlayerAccuracy: jest.fn(),
   getPlayerStats: jest.fn(),
   getPlayerSchedule: jest.fn(),
   getScoringPreset: jest.fn(),
@@ -54,6 +56,7 @@ describe("PlayerDetailPage", () => {
   beforeEach(() => {
     mockedGetPlayer.mockReset();
     mockedGetPlayerStats.mockReset();
+    jest.mocked(getPlayerAccuracy).mockResolvedValue([]);
     mockedGetPlayerSchedule.mockReset();
     mockedGetPlayerSchedule.mockResolvedValue([]);
     mockedGetScoringPreset.mockReset();

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { PlayerGameStatsEntry, ScheduleEntry, ScoringConfig, Sport } from "@/lib/api";
 import { buildLogRows } from "@/lib/gameLog";
 import { describeScoring } from "@/lib/scoringNote";
@@ -20,6 +20,8 @@ interface PlayerStatsProps {
   byeWeek: number | null;
   /** The default scoring FPTS is computed under, for the note under the game log. */
   scoring?: ScoringConfig | null;
+  /** A box shown with the trend, in the column beside the averages (the projection accuracy). */
+  accuracy?: ReactNode;
 }
 
 /**
@@ -33,6 +35,7 @@ export default function PlayerStats({
   schedule,
   byeWeek,
   scoring = null,
+  accuracy = null,
 }: PlayerStatsProps) {
   const profile = profileFor(sport, position);
   const scoringNote = scoring ? describeScoring(scoring, profile.scoringKind) : null;
@@ -68,6 +71,7 @@ export default function PlayerStats({
               : `${profile.untrackedLabel ?? "Stat"} stats and fantasy points will appear here once they are added.`}
           </p>
         </section>
+        {accuracy}
         {hasSchedule && (
           <GameLog
             sport={sport}
@@ -83,35 +87,52 @@ export default function PlayerStats({
     );
   }
 
+  // Boxes sit in rows of equal height, so neighbours start and end level with no empty space under
+  // either. The game log spans the page below. Without an accuracy box the trend runs down beside
+  // the averages and the consistency strip instead.
+  const grid = "grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] [&>section]:min-w-0";
+  const trend = (
+    <StatChart
+      entries={completed}
+      stat={stat}
+      onStatChange={setStat}
+      statOptions={profile.rows}
+      range={range}
+      onRangeChange={setRange}
+    />
+  );
+  const averages = (
+    <AveragesTable sport={sport} entries={completed} rows={profile.rows} selectedStat={stat} />
+  );
+  const consistency = <ConsistencyStrip entries={completed} stat={stat} />;
   return (
-    <div className="mt-5 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="flex min-w-0 flex-col gap-5">
-        <StatChart
-          entries={completed}
-          stat={stat}
-          onStatChange={setStat}
-          statOptions={profile.rows}
-          range={range}
-          onRangeChange={setRange}
-        />
-        <GameLog
-          sport={sport}
-          rows={rows}
-          selectedStat={stat}
-          columns={profile.logColumns}
-          negativeStats={profile.negativeStats}
-          scoringNote={scoringNote}
-        />
-      </div>
-      <aside className="flex min-w-0 flex-col gap-5">
-        <AveragesTable
-          sport={sport}
-          entries={completed}
-          rows={profile.rows}
-          selectedStat={stat}
-        />
-        <ConsistencyStrip entries={completed} stat={stat} />
-      </aside>
+    <div className="mt-5 flex flex-col gap-5">
+      {accuracy ? (
+        <>
+          <div className={grid}>
+            {trend}
+            {averages}
+          </div>
+          <div className={grid}>
+            {accuracy}
+            {consistency}
+          </div>
+        </>
+      ) : (
+        <div className={`${grid} lg:grid-rows-[auto_1fr]`}>
+          <div className="min-w-0 lg:row-span-2 [&>section]:h-full">{trend}</div>
+          {averages}
+          {consistency}
+        </div>
+      )}
+      <GameLog
+        sport={sport}
+        rows={rows}
+        selectedStat={stat}
+        columns={profile.logColumns}
+        negativeStats={profile.negativeStats}
+        scoringNote={scoringNote}
+      />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 """Response schemas for the accuracy API (app/api/v1/accuracy.py)."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -60,3 +61,30 @@ class AccuracyResponse(BaseModel):
     series: list[PeriodPoint]
     coverage: dict[str, Coverage]
     notes: list[str]
+
+
+class PlayerGame(BaseModel):
+    """One player's game: real fantasy points against each source's last pre-kickoff projection
+    under the request's scoring. `actual` is null when the player didn't play; a source that saved
+    nothing for the game is missing from `projected`."""
+
+    game_id: int
+    player_id: int
+    player_name: str
+    position: str | None
+    team: str | None
+    opponent: str | None
+    home: bool
+    season: str
+    week: int | None
+    start_time: datetime
+    played: bool
+    actual: float | None
+    projected: dict[str, float]
+
+
+class PlayerGamesResponse(BaseModel):
+    sport: str
+    scoring: str
+    origin: Literal["live", "backtest"]
+    items: list[PlayerGame]

@@ -78,7 +78,7 @@ export default function StatChart({
   return (
     <section
       aria-label="Game trend"
-      className="rounded-2xl border border-line bg-surface shadow-panel"
+      className="flex flex-col rounded-2xl border border-line bg-surface shadow-panel"
     >
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-4 sm:px-5">
         <h2 className="font-display text-xl font-semibold uppercase tracking-[0.06em]">
@@ -151,11 +151,11 @@ export default function StatChart({
       </div>
 
       <div
-        className="px-2 pb-3.5 pt-1.5"
+        className="min-h-[270px] flex-1 px-2 pb-3.5 pt-1.5"
         role="img"
         aria-label={`${statName} over ${points.length} games, average ${formatStat(mean)}`}
       >
-        <ResponsiveContainer width="100%" height={270}>
+        <ResponsiveContainer width="100%" height="100%" minHeight={250}>
           <BarChart data={points} margin={{ top: 18, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid vertical={false} stroke="var(--line-2)" />
             <XAxis

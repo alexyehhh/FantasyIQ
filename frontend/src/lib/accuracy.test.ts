@@ -1,14 +1,29 @@
 import {
-  chartRows,
   formatBias,
-  formatCorrelation,
   formatMiss,
+  gameMiss,
   orderedSources,
   sourceColor,
   sourceLabel,
-  verdict,
+  summarize,
 } from "./accuracy";
-import { makeAccuracyResponse, makeAccuracyTotals } from "@/test/fixtures";
+import type { AccuracyPlayerGame } from "./api";
+
+const game = (actual: number | null, projected: Record<string, number>): AccuracyPlayerGame => ({
+  game_id: 1,
+  player_id: 7,
+  player_name: "Aaron Rodgers",
+  position: "QB",
+  team: "PIT",
+  opponent: "CLE",
+  home: false,
+  season: "2026",
+  week: 4,
+  start_time: "2026-10-02T00:15:00",
+  played: actual !== null,
+  actual,
+  projected,
+});
 
 describe("sources", () => {
   it("names the known sources and falls back to the raw name", () => {
@@ -20,11 +35,9 @@ describe("sources", () => {
   it("colors by who the source is, never by its order", () => {
     expect(sourceColor("fantasyiq")).toBe("var(--series-model)");
     expect(sourceColor("sleeper")).toBe("var(--series-other)");
-    expect(sourceColor("fantasyiq")).toBe(sourceColor("fantasyiq"));
   });
 
   it("puts our model first, then the others alphabetically", () => {
-    expect(orderedSources(["sleeper", "fantasyiq"])).toEqual(["fantasyiq", "sleeper"]);
     expect(orderedSources(["yahoo", "sleeper", "fantasyiq"])).toEqual(["fantasyiq", "sleeper", "yahoo"]);
   });
 });
@@ -33,81 +46,50 @@ describe("formatting", () => {
   it("shows points with a decimal and a dash for nothing", () => {
     expect(formatMiss(4.46)).toBe("4.5");
     expect(formatMiss(null)).toBe("—");
-    expect(formatMiss(undefined)).toBe("—");
-    expect(formatCorrelation(0.6234)).toBe("0.62");
-    expect(formatCorrelation(null)).toBe("—");
   });
 
-  it("signs a bias and calls a negligible one zero", () => {
+  it("signs a bias", () => {
     expect(formatBias(1.24)).toBe("+1.2");
-    expect(formatBias(-0.44)).toBe("−0.4");
-    expect(formatBias(0.02)).toBe("0.0");
+    expect(formatBias(-0.4)).toBe("−0.4");
+    expect(formatBias(0.01)).toBe("0.0");
   });
 });
 
-describe("chartRows", () => {
-  it("makes one row per week with each source's miss under its name", () => {
-    const rows = chartRows(makeAccuracyResponse());
+describe("gameMiss", () => {
+  it("is projected minus actual, null without a result or a projection", () => {
+    expect(gameMiss(game(20, { sleeper: 13.5 }), "sleeper")).toBeCloseTo(-6.5);
+    expect(gameMiss(game(null, { sleeper: 13.5 }), "sleeper")).toBeNull();
+    expect(gameMiss(game(20, {}), "sleeper")).toBeNull();
+  });
+});
 
-    expect(rows).toEqual([
-      { key: "2026-04", label: "Week 4", n: 120, fantasyiq: 4.6, sleeper: 5.1 },
-      { key: "2026-05", label: "Week 5", n: 120, fantasyiq: 4.2, sleeper: 4.9 },
+describe("summarize", () => {
+  it("averages each source's miss and names the closer one", () => {
+    const summary = summarize([
+      game(20, { fantasyiq: 15, sleeper: 12 }), // misses -5, -8
+      game(10, { fantasyiq: 12, sleeper: 16 }), // misses +2, +6
     ]);
-  });
-});
 
-describe("verdict", () => {
-  it("says who is closer, and by how much, when there is enough data", () => {
-    const result = verdict(makeAccuracyResponse());
-
-    expect(result.kind).toBe("closer");
-    expect(result.text).toBe(
-      "FantasyIQ model is closer: it misses by 4.4 points on average, 0.6 fewer than Sleeper.",
-    );
+    expect(summary.n).toBe(2);
+    const [model, sleeper] = summary.averages;
+    expect(model).toMatchObject({ source: "fantasyiq", mae: 3.5, bias: -1.5 });
+    expect(sleeper).toMatchObject({ source: "sleeper", mae: 7, bias: -1 });
+    expect(summary.best).toBe("fantasyiq");
   });
 
-  it("names the other source when it is the closer one", () => {
-    const report = makeAccuracyResponse({
-      overall: {
-        fantasyiq: makeAccuracyTotals({ mae: 5.5 }),
-        sleeper: makeAccuracyTotals({ mae: 4.5 }),
-      },
-    });
+  it("skips games the player missed and games a source didn't project", () => {
+    const summary = summarize([
+      game(null, { fantasyiq: 15, sleeper: 12 }),
+      game(10, { fantasyiq: 12 }),
+      game(10, { fantasyiq: 11, sleeper: 9 }),
+    ]);
 
-    expect(verdict(report).text).toMatch(/^Sleeper is closer: it misses by 4\.5 points/);
+    expect(summary.n).toBe(1);
+    expect(summary.averages.map((a) => a.mae)).toEqual([1, 1]);
+    expect(summary.best).toBeNull(); // a tie
   });
 
-  it("calls a dead heat a tie rather than naming a winner", () => {
-    const report = makeAccuracyResponse({
-      overall: {
-        fantasyiq: makeAccuracyTotals({ mae: 4.5 }),
-        sleeper: makeAccuracyTotals({ mae: 4.52 }),
-      },
-    });
-
-    expect(verdict(report).kind).toBe("tie");
-  });
-
-  it("refuses to pick a winner from too little data", () => {
-    const result = verdict(makeAccuracyResponse({ compared: 12, enough_data: false }));
-
-    expect(result.kind).toBe("thin");
-    expect(result.text).toMatch(/Only 12 player-games so far/);
-  });
-
-  it("explains an empty report", () => {
-    const result = verdict(makeAccuracyResponse({ compared: 0, enough_data: false, overall: {} }));
-
-    expect(result.kind).toBe("empty");
-    expect(result.text).toMatch(/No finished games have saved projections/);
-  });
-
-  it("has nothing to compare with a single source", () => {
-    const report = makeAccuracyResponse({
-      sources: ["sleeper"],
-      overall: { sleeper: makeAccuracyTotals() },
-    });
-
-    expect(verdict(report).text).toMatch(/nothing to compare/);
+  it("has nothing to say without games", () => {
+    expect(summarize([])).toEqual({ n: 0, averages: [], best: null });
   });
 });

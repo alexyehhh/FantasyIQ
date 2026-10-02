@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.scoring_param import SCORING_PARAM_DESCRIPTION, scoring_or_422
 from app.db.session import get_db
-from app.schemas.accuracy import AccuracyResponse
+from app.schemas.accuracy import AccuracyResponse, PlayerGame, PlayerGamesResponse
 from app.services import accuracy as accuracy_service
 
 router = APIRouter(tags=["accuracy"])
@@ -47,3 +47,26 @@ def get_accuracy(
         include_dnp=include_dnp,
     )
     return AccuracyResponse.model_validate(asdict(report))
+
+
+@router.get("/accuracy/players", response_model=PlayerGamesResponse)
+def get_player_games(
+    sport: Literal["NBA", "NFL"],
+    player_id: int | None = Query(
+        default=None, description="One player's finished games; default is the latest games"
+    ),
+    scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
+    origin: Literal["live", "backtest"] = Query(default="live"),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
+) -> PlayerGamesResponse:
+    config = scoring_or_422(scoring, sport)
+    rows = accuracy_service.player_games(
+        db, sport=sport, config=config, player_id=player_id, origin=origin, limit=limit
+    )
+    return PlayerGamesResponse(
+        sport=sport,
+        scoring=config.name,
+        origin=origin,
+        items=[PlayerGame.model_validate(asdict(r)) for r in rows],
+    )

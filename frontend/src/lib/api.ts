@@ -599,61 +599,45 @@ async function fetchJson<T>(path: string, what: string): Promise<T> {
   return res.json();
 }
 
-/** One source's accuracy over a set of player-games, in fantasy points. */
-export interface AccuracyTotals {
-  n: number;
-  /** Average size of the miss: lower is better. */
-  mae: number;
-  rmse: number;
-  /** Mean of projected minus actual: positive means it projects too high. */
-  bias: number;
-  mean_projected: number;
-  mean_actual: number;
-  /** Average per-week agreement between projected and actual order of players (-1 to 1). */
-  rank_corr: number | null;
+/** One player's game: real fantasy points beside each source's last pre-kickoff projection. */
+export interface AccuracyPlayerGame {
+  game_id: number;
+  player_id: number;
+  player_name: string;
+  position: string | null;
+  team: string | null;
+  opponent: string | null;
+  home: boolean;
+  season: string;
+  week: number | null;
+  start_time: string;
+  played: boolean;
+  /** Null when the player didn't play. */
+  actual: number | null;
+  /** A source that saved nothing for the game is missing. */
+  projected: Record<string, number>;
 }
 
-/** Each source's average miss in one NFL week or NBA week, on the same player-games. */
-export interface AccuracyPoint {
-  key: string;
-  label: string;
-  n: number;
-  mae: Record<string, number>;
-}
-
-export interface AccuracyPosition {
-  position: string;
-  n: number;
-  enough_data: boolean;
-  sources: Record<string, AccuracyTotals>;
-}
-
-export interface AccuracyResponse {
+export interface AccuracyPlayersResponse {
   sport: Sport;
   scoring: string;
   origin: "live" | "backtest";
-  sources: string[];
-  /** Player-games every compared source projected and that were played. */
-  compared: number;
-  did_not_play: number;
-  enough_data: boolean;
-  overall: Record<string, AccuracyTotals>;
-  by_position: AccuracyPosition[];
-  series: AccuracyPoint[];
-  coverage: Record<string, { projected: number; compared: number }>;
-  notes: string[];
+  items: AccuracyPlayerGame[];
 }
 
-/** How accurate each source's saved, pre-kickoff projections were against the real results. */
-export function getAccuracy(query: {
-  sport: Sport;
-  position?: string | null;
-  scoring?: ScoringConfig | null;
-}): Promise<AccuracyResponse> {
-  const params = new URLSearchParams({ sport: query.sport });
-  if (query.position) params.set("position", query.position);
-  if (query.scoring) params.set("scoring", JSON.stringify(query.scoring));
-  return fetchJson(`/api/v1/accuracy?${params}`, "load projection accuracy");
+/** A player's finished games with the real points beside each source's projection, newest first. */
+export async function getPlayerAccuracy(
+  playerId: number,
+  sport: Sport,
+  scoring?: ScoringConfig | null,
+): Promise<AccuracyPlayerGame[]> {
+  const params = new URLSearchParams({ sport, player_id: String(playerId), limit: "100" });
+  if (scoring) params.set("scoring", JSON.stringify(scoring));
+  const res: AccuracyPlayersResponse = await fetchJson(
+    `/api/v1/accuracy/players?${params}`,
+    "load player accuracy",
+  );
+  return res.items;
 }
 
 export function getProjectionSources(): Promise<ProjectionSource[]> {
