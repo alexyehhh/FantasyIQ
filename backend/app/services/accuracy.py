@@ -498,3 +498,79 @@ def player_games(
         )
     rows.sort(key=lambda r: (r.start_time, r.actual or 0.0), reverse=True)
     return rows[:100]
+
+
+def defense_games(
+    db: Session,
+    *,
+    config: ScoringConfig,
+    team_id: int,
+    origin: Origin = "live",
+    limit: int = 20,
+) -> list[PlayerGameRow]:
+    """One NFL team defense's finished games, newest first, as `player_games` gives a player's:
+    its real fantasy points beside each source's last pre-kickoff projection (the row's player
+    fields hold the team)."""
+    games = {
+        g.id: g
+        for g in db.scalars(
+            select(Game)
+            .where(
+                Game.sport == "NFL",
+                Game.status == "final",
+                Game.stats_final.is_(True),
+                Game.id.in_(
+                    select(ProjectionSnapshot.game_id).where(
+                        ProjectionSnapshot.kind == "defense",
+                        ProjectionSnapshot.entity_id == team_id,
+                        ProjectionSnapshot.origin == origin,
+                    )
+                ),
+            )
+            .order_by(Game.start_time.desc())
+            .limit(limit)
+        )
+    }
+    if not games:
+        return []
+    snapshots = {
+        k: by
+        for k, by in _latest_before_kickoff(db, "NFL", origin, games).items()
+        if k[0] == "defense" and k[1] == team_id
+    }
+    teams = {t.id: t for t in db.scalars(select(Team).where(Team.sport == "NFL"))}
+    lines = {
+        row.game_id: {column.name: getattr(row, column.name) for column in row.__table__.columns}
+        for row in db.scalars(
+            select(TeamGameStatsNFL).where(
+                TeamGameStatsNFL.team_id == team_id,
+                TeamGameStatsNFL.game_id.in_({k[2] for k in snapshots}),
+            )
+        )
+    }
+    team = teams.get(team_id)
+    rows: list[PlayerGameRow] = []
+    for (_, _, game_id), by_source in snapshots.items():
+        game = games[game_id]
+        home = game.home_team_id == team_id
+        line = lines.get(game_id)
+        opponent = teams.get(game.away_team_id if home else game.home_team_id)
+        rows.append(
+            PlayerGameRow(
+                game_id=game_id,
+                player_id=team_id,
+                player_name=team.name if team else "",
+                position="DEF",
+                team=team.abbreviation if team else None,
+                opponent=opponent.abbreviation if opponent else None,
+                home=home,
+                season=game.season,
+                week=game.week,
+                start_time=game.start_time,
+                played=line is not None,
+                actual=score_defense_game(config, line) if line else None,
+                projected={s: _projected_points(config, snap) for s, snap in by_source.items()},
+            )
+        )
+    rows.sort(key=lambda r: r.start_time, reverse=True)
+    return rows

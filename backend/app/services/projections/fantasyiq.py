@@ -2,8 +2,9 @@
 
 It answers the same question as Sleeper, in raw stats, so it is rescored with the caller's
 `ScoringConfig` like every source. What it knows is a player's own recent games, home or away and
-rest, so unlike Sleeper it is not matchup-aware yet. It covers NBA players and NFL QB/RB/WR/TE;
-kickers and team defenses, and anyone with fewer than a few games of history, are unavailable.
+rest, so unlike Sleeper it is not matchup-aware yet for players. It covers NBA players, NFL
+QB/RB/WR/TE and NFL team defenses (`fantasyiq_defense`, which does allow for the opponent's
+offense); kickers, and anyone with fewer than a few games of history, are unavailable.
 
 Nothing is stored: a projection is computed on request from the saved model file (`models/`,
 written by `python -m app.ml.train`) and the finished games already in the database.

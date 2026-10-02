@@ -2,6 +2,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import DefenseDetailPage from "./page";
 import {
   getDefense,
+  getDefenseAccuracy,
   getDefenseSchedule,
   getDefenseSeason,
   getDefenseStats,
@@ -19,6 +20,7 @@ import {
 
 jest.mock("@/lib/api", () => ({
   getDefense: jest.fn(),
+  getDefenseAccuracy: jest.fn(),
   getDefenseStats: jest.fn(),
   getDefenseSchedule: jest.fn(),
   getScoringPreset: jest.fn(),
@@ -52,6 +54,7 @@ describe("DefenseDetailPage", () => {
     mockedGetScoring.mockReset();
     mockedGetSeason.mockReset();
     mockedGetSeason.mockResolvedValue(null);
+    jest.mocked(getDefenseAccuracy).mockResolvedValue([]);
     mockedGetDefense.mockResolvedValue(makeDefenseDetail());
     mockedGetStats.mockResolvedValue([makeDefenseEntry()]);
     mockedGetSchedule.mockResolvedValue([]);
@@ -174,5 +177,20 @@ describe("DefenseDetailPage", () => {
     await renderPage();
 
     expect(screen.getByRole("link", { name: /Back to players/ })).toHaveAttribute("href", "/players");
+  });
+
+  it("shows how the projections compared with the defense's real points", async () => {
+    jest.mocked(getDefenseAccuracy).mockResolvedValue([
+      {
+        game_id: 1, player_id: 7, player_name: "Pittsburgh Steelers", position: "DEF", team: "PIT",
+        opponent: "CLE", home: true, season: "2026", week: 4, start_time: "2026-10-02T00:15:00",
+        played: true, actual: 9, projected: { sleeper: 7.5, fantasyiq: 8.2 },
+      },
+    ]);
+    await renderPage();
+
+    const section = screen.getByRole("region", { name: "Projection accuracy" });
+    expect(within(section).getByText("Week 4")).toBeInTheDocument();
+    expect(within(section).getByText(/FantasyIQ model has been closer/)).toBeInTheDocument();
   });
 });

@@ -640,6 +640,20 @@ export async function getPlayerAccuracy(
   return res.items;
 }
 
+/** A team defense's finished games, shaped like a player's (the player fields hold the team). */
+export async function getDefenseAccuracy(
+  teamId: number,
+  scoring?: ScoringConfig | null,
+): Promise<AccuracyPlayerGame[]> {
+  const params = new URLSearchParams({ limit: "100" });
+  if (scoring) params.set("scoring", JSON.stringify(scoring));
+  const res: AccuracyPlayersResponse = await fetchJson(
+    `/api/v1/accuracy/defenses/${teamId}?${params}`,
+    "load defense accuracy",
+  );
+  return res.items;
+}
+
 export function getProjectionSources(): Promise<ProjectionSource[]> {
   return fetchJson("/api/v1/projections/sources", "list projection sources");
 }

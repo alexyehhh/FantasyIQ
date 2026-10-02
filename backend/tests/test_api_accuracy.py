@@ -5,7 +5,14 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db.models import Game, Player, PlayerGameStatsNFL, ProjectionSnapshot, Team
+from app.db.models import (
+    Game,
+    Player,
+    PlayerGameStatsNFL,
+    ProjectionSnapshot,
+    Team,
+    TeamGameStatsNFL,
+)
 from app.db.session import SessionLocal, get_db
 from app.main import app
 
@@ -121,3 +128,28 @@ def test_without_a_player_it_lists_the_latest_games(client, played_game):
 
     assert [i["player_name"] for i in body["items"]] == ["Wes Receiver"]
     assert client.get("/api/v1/accuracy/players", params={"sport": "NBA"}).json()["items"] == []
+
+
+def test_lists_a_team_defenses_real_points_beside_each_sources_projection(client, played_game, db):
+    alpha = db.get(Team, played_game.home_team_id)
+    db.add(TeamGameStatsNFL(team_id=alpha.id, game_id=played_game.id, sacks=3, points_allowed=10))
+    for source, sacks in (("sleeper", 3.0), ("fantasyiq", 1.0)):
+        db.add(
+            ProjectionSnapshot(
+                source=source, sport="NFL", kind="defense", entity_id=alpha.id,
+                game_id=played_game.id, origin="live",
+                captured_at=KICKOFF - timedelta(hours=2),
+                stats={"sacks": sacks, "points_allowed": 10.0},
+            )
+        )  # fmt: skip
+    db.flush()
+
+    body = client.get(f"/api/v1/accuracy/defenses/{alpha.id}").json()
+
+    [item] = body["items"]
+    assert item["position"] == "DEF" and item["team"] == "ALP" and item["opponent"] == "BRV"
+    assert item["played"] is True and item["week"] == 4
+    # Points allowed are projected as an expected value, so compare the sources with each other:
+    # two fewer sacks projected is two fewer points.
+    assert item["actual"] is not None
+    assert item["projected"]["sleeper"] - item["projected"]["fantasyiq"] == pytest.approx(2.0)

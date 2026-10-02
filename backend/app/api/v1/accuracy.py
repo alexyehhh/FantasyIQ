@@ -70,3 +70,25 @@ def get_player_games(
         origin=origin,
         items=[PlayerGame.model_validate(asdict(r)) for r in rows],
     )
+
+
+@router.get("/accuracy/defenses/{team_id}", response_model=PlayerGamesResponse)
+def get_defense_games(
+    team_id: int,
+    scoring: str | None = Query(default=None, description=SCORING_PARAM_DESCRIPTION),
+    origin: Literal["live", "backtest"] = Query(default="live"),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),  # noqa: B008 — idiomatic FastAPI DI
+) -> PlayerGamesResponse:
+    """One NFL team defense's finished games: real fantasy points against each source's
+    projection, shaped like `/accuracy/players` (the item's player fields hold the team)."""
+    config = scoring_or_422(scoring, "NFL")
+    rows = accuracy_service.defense_games(
+        db, config=config, team_id=team_id, origin=origin, limit=limit
+    )
+    return PlayerGamesResponse(
+        sport="NFL",
+        scoring=config.name,
+        origin=origin,
+        items=[PlayerGame.model_validate(asdict(r)) for r in rows],
+    )
