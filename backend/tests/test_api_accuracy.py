@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db.models import (
+    FieldGoalKick,
     Game,
     Player,
     PlayerGameStatsNFL,
@@ -153,3 +154,46 @@ def test_lists_a_team_defenses_real_points_beside_each_sources_projection(client
     # two fewer sacks projected is two fewer points.
     assert item["actual"] is not None
     assert item["projected"]["sleeper"] - item["projected"]["fantasyiq"] == pytest.approx(2.0)
+
+
+def test_a_kickers_points_are_scored_by_distance_on_both_sides(client, played_game, db):
+    kip = Player(
+        name="Kip Kicker", sport="NFL", team_id=played_game.home_team_id, position="PK", active=True
+    )
+    db.add(kip)
+    db.flush()
+    db.add(
+        PlayerGameStatsNFL(
+            player_id=kip.id, game_id=played_game.id, field_goal_attempts=2, field_goals_made=1,
+            extra_point_attempts=2, extra_points_made=2,
+        )
+    )  # fmt: skip
+    for n, (distance, result) in enumerate([(52, "made"), (33, "missed")]):
+        db.add(
+            FieldGoalKick(
+                player_id=kip.id, game_id=played_game.id, distance=distance, result=result,
+                external_play_id=f"kip-{n}",
+            )
+        )  # fmt: skip
+    # The same 52-yard make and 33-yard miss, projected as expected kicks.
+    kicks = [
+        {"low": 30, "high": 39, "made": 0.0, "missed": 1.0},
+        {"low": 50, "high": 65, "made": 1.0, "missed": 0.0},
+    ]
+    for source in ("sleeper", "fantasyiq"):
+        db.add(
+            ProjectionSnapshot(
+                source=source, sport="NFL", kind="player", entity_id=kip.id,
+                game_id=played_game.id, origin="live", captured_at=KICKOFF - timedelta(hours=2),
+                stats={"extra_point_attempts": 2, "extra_points_made": 2}, kicks=kicks,
+            )
+        )  # fmt: skip
+    db.flush()
+
+    [item] = client.get(
+        "/api/v1/accuracy/players", params={"sport": "NFL", "player_id": kip.id}
+    ).json()["items"]
+
+    # 2 extra points (+2), a 52-yard make (+5) and a 33-yard miss (-3).
+    assert item["actual"] == pytest.approx(4.0)
+    assert item["projected"] == {"sleeper": pytest.approx(4.0), "fantasyiq": pytest.approx(4.0)}
