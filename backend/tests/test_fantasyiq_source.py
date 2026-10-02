@@ -9,8 +9,15 @@ import pytest
 from app.db.models import Game, Player, PlayerGameStatsNFL, Team, TeamGameStatsNFL
 from app.db.session import SessionLocal
 from app.ml import defense as defense_model
+from app.ml import kicker as kicker_model
 from app.ml.dataset import STATS
-from app.services.projections import base, fantasyiq, fantasyiq_defense, service
+from app.services.projections import (
+    base,
+    fantasyiq,
+    fantasyiq_defense,
+    fantasyiq_kicker,
+    service,
+)
 from app.services.projections.news import TeamNews
 from app.services.scoring import default_config
 
@@ -24,6 +31,16 @@ class AverageOfLastThree:
 
     def predict(self, features):
         return pd.DataFrame({s: features[f"{s}__m3"] for s in STATS["NFL"]}, index=features.index)
+
+
+class NoKicks:
+    """A stand-in kicker model; these tests are about who gets projected, not what it predicts."""
+
+    trained_through = "2026-01-01"
+    league = kicker_model.LeagueRates({b: 0.8 for b in kicker_model.BUCKETS}, 0.95)
+
+    def predict(self, features):
+        return pd.DataFrame(0.0, index=features.index, columns=kicker_model.ATTEMPTS)
 
 
 @pytest.fixture
@@ -41,6 +58,8 @@ def trained(monkeypatch):
     monkeypatch.setattr(fantasyiq.ml_model, "load_cached", lambda sport: AverageOfLastThree())
     fantasyiq._data_cache.clear()  # each test has its own games, which the cache can't tell apart
     monkeypatch.setattr(fantasyiq, "team_news", lambda db, sport, teams: TeamNews())
+    monkeypatch.setattr(fantasyiq_kicker.model, "load_cached", lambda *args: NoKicks())
+    fantasyiq_kicker._cache.clear()
 
 
 def _team(db, name, abbreviation):
@@ -130,13 +149,13 @@ def test_a_player_with_too_little_history_is_unavailable(db, league):
     assert "games of history" in result.notes[0]
 
 
-def test_kickers_are_not_modelled(db, league):
+def test_a_kicker_with_no_kicking_history_is_unavailable(db, league):
     alpha, *_ = league
     kicker = _player(db, alpha, "Kip Kicker", position="PK")
 
     (result,) = _project(db, player_ids=[kicker.id])
 
-    assert result.status == "unavailable" and "doesn't project" in result.notes[0]
+    assert result.status == "unavailable" and "games of history" in result.notes[0]
 
 
 def test_an_untrained_model_is_an_error_not_a_guess(db, league, monkeypatch):

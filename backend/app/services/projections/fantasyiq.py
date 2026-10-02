@@ -4,7 +4,8 @@ It answers the same question as Sleeper, in raw stats, so it is rescored with th
 `ScoringConfig` like every source. What it knows is a player's own recent games, home or away and
 rest, so unlike Sleeper it is not matchup-aware yet for players. It covers NBA players, NFL
 QB/RB/WR/TE and NFL team defenses (`fantasyiq_defense`, which does allow for the opponent's
-offense); kickers, and anyone with fewer than a few games of history, are unavailable.
+offense) and NFL kickers (`fantasyiq_kicker`: expected attempts by distance, and the kicker's
+own make rates); anyone with fewer than a few games of history is unavailable.
 
 Nothing is stored: a projection is computed on request from the saved model file (`models/`,
 written by `python -m app.ml.train`) and the finished games already in the database.
@@ -27,7 +28,7 @@ from app.ml import model as ml_model
 from app.ml.availability import EXPECTED_OUT, Timeline
 from app.ml.dataset import POSITION_ALIASES, POSITIONS, STATS, load_history, load_team_games
 from app.ml.features import MIN_PRIOR_GAMES, POSITION_CODES, build_features
-from app.services.projections import fantasyiq_defense
+from app.services.projections import fantasyiq_defense, fantasyiq_kicker
 from app.services.projections.base import (
     Key,
     ProjectionError,
@@ -42,6 +43,7 @@ from app.services.projections.expected_scoring import (
     score_expected_player,
 )
 from app.services.projections.fantasyiq_defense import DefenseRow
+from app.services.projections.fantasyiq_kicker import KICKER_POSITIONS, KickerRow, is_kicker
 from app.services.projections.news import TeamNews, team_news
 from app.services.projections.sleeper import et_date
 from app.services.scoring import ScoringConfig, player_stat_values
@@ -93,7 +95,8 @@ class FantasyIQProvider:
         "projects from a player's recent games, home or away, rest and which teammates are out "
         "(a backup's workload rises when the starter is hurt); it does not use the opponent for "
         "players yet. NBA players and NFL QB, RB, WR and TE, plus NFL team defenses (which do "
-        "allow for the opponent's offense)."
+        "allow for the opponent's offense) and kickers (expected kicks by distance from the "
+        "team's scoring and the opponent's defense, with the kicker's own make rates)."
     )
     sports = frozenset({"NBA", "NFL"})
 
@@ -200,17 +203,30 @@ class FantasyIQProvider:
                 if isinstance(answer, StatProjection):
                     answer.unprojected = missing_defense
                 results[target.key] = answer
+        kickers = []
         for target in targets:
             if target.kind == "defense":
                 continue
-            if target.player is None:
+            if target.sport == "NFL" and is_kicker(target.player):
+                assert target.player is not None
+                kickers.append(KickerRow(target.player, target.game))
+            elif target.player is None:
                 results[target.key] = Unavailable(_NOT_MODELLED.format(what="this"))
             else:
                 rows.append(_Row(target.player, target.game, target.is_home))
+        supported = set(STATS.get(sport, ())) | set(player_stat_values(config.sport, {}))
+        weighted = {s for s, w in config.player_weights.items() if w}
+        missing = sorted(weighted - supported - _RARE_STATS)
+        if kickers:
+            missing_kicks = sorted(set(missing) - fantasyiq_kicker.KICKER_STATS)
+            by_kicker = fantasyiq_kicker.predict(db, kickers)
+            for target in targets:
+                answer = by_kicker.get(target.entity_id)
+                if target.kind == "player" and is_kicker(target.player) and answer is not None:
+                    if isinstance(answer, StatProjection):
+                        answer.unprojected = missing_kicks
+                    results[target.key] = answer
         if rows:
-            supported = set(STATS[sport]) | set(player_stat_values(config.sport, {}))
-            weighted = {s for s, w in config.player_weights.items() if w}
-            missing = sorted(weighted - supported - _RARE_STATS)
             by_player = self._predict(db, sport, rows)
             for target in targets:
                 answer = by_player.get(target.entity_id)
@@ -276,7 +292,7 @@ class FantasyIQProvider:
             select(Player).where(
                 Player.sport == sport, Player.active.is_(True), Player.team_id.in_(by_team)
             )
-        )
+        ).all()
         rows = [
             _Row(p, *by_team[p.team_id])
             for p in players
@@ -288,6 +304,19 @@ class FantasyIQProvider:
             if isinstance(answer, StatProjection):
                 points = score_expected_player(config, answer.stats).points
                 ranked.append(RankedCandidate("player", player_id, points, injuries[player_id]))
+        if sport == "NFL" and (positions is None or KICKER_POSITIONS & set(positions)):
+            kickers = [
+                KickerRow(p, by_team[p.team_id][0])
+                for p in players
+                if p.team_id is not None and is_kicker(p)
+            ]
+            for player_id, answer in fantasyiq_kicker.predict(db, kickers).items():
+                if isinstance(answer, StatProjection):
+                    points = score_expected_player(config, answer.stats, answer.kicks).points
+                    kicker = next(k.player for k in kickers if k.player.id == player_id)
+                    ranked.append(
+                        RankedCandidate("player", player_id, points, kicker.injury_status)
+                    )
         return sorted(ranked, key=lambda c: -c.points)
 
 

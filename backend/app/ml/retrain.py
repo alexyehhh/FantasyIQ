@@ -1,12 +1,14 @@
 """Retraining the projection models on a schedule (the worker's `retrain` job).
 
-Each model (NBA players, NFL players, NFL team defenses) is refit with the same functions as the
-train CLIs: a held-out evaluation (trained on the games before a cutoff, scored on the rest), then
-a refit on every finished game. The refit replaces the saved model only if `decide` accepts it.
+Each model (NBA players, NFL players, NFL team defenses, NFL kickers) is refit with the same
+functions as the train CLIs: a held-out evaluation (trained on the games before a cutoff, scored
+on the rest), then a refit on every finished game. The refit replaces the saved model only if
+`decide` accepts it.
 
 The rule. The held-out test set grows between runs (new games land after the cutoff), so raw MAE
 from one run can't be compared with another's. Each run does score the same simple baseline on its
-own test rows, though: `recent_avg`, the decaying average of the player's (or defense's) own games.
+own test rows, though: `recent_avg`, the decaying average of the player's (or the defense's or
+kicker's) own games.
 A model's *skill* is its fantasy-point MAE divided by that baseline's MAE on the same rows, over
 all positions; lower is better, and below 1 beats the baseline. A new model replaces the saved one
 when all of these hold:
@@ -32,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.ml import defense, model, train, train_defense
+from app.ml import defense, kicker, model, train, train_defense, train_kicker
 from app.ml.model import MODEL_DIR
 
 logger = logging.getLogger(__name__)
@@ -101,6 +103,7 @@ TARGETS = (
         "NFL", lambda log: train.fit("NFL", log=log), lambda d: model.load("NFL", d), model.save
     ),
     Target("NFL defense", lambda log: train_defense.fit(log=log), defense.load, defense.save),
+    Target("NFL kicker", lambda log: train_kicker.fit(log=log), kicker.load, kicker.save),
 )
 
 
