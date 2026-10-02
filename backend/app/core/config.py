@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     worker_snapshots_interval_seconds: float = 3600.0
     # Retraining the projection models on every finished game (app/ml/retrain.py).
     worker_retrain_interval_seconds: float = 7 * 24 * 3600.0
+    worker_news_interval_seconds: float = 1800.0
     worker_backfill_games_per_run: int = 20
     live_refresh_cooldown_seconds: float = 30.0
     # Short, since one slow game shouldn't hold up the others being refreshed.
@@ -83,6 +84,21 @@ class Settings(BaseSettings):
     # https://aistudio.google.com/rate-limit and adjust.
     analyst_rate_limit_per_minute: int = 8
     analyst_rate_limit_per_day: int = 150
+
+    # Reading player news with Gemini (app/services/news/). It uses its own, cheaper model so it
+    # draws on a different quota than the analyst's, and every call is counted in the database
+    # (app/ai/budget.py) so the limits hold across restarts and processes. They are deliberately
+    # far below what the free tier allows: the daily count is a rolling 24 hours, which is never
+    # looser than Google's calendar-day quota. If you point both models at the same one, keep the
+    # sum of the two daily limits under your quota at https://aistudio.google.com/rate-limit.
+    news_gemini_model: str = "gemini-flash-lite-latest"
+    news_gemini_per_minute: int = 3
+    news_gemini_per_day: int = 40
+    # Articles read per Gemini call, and the most calls one worker run may make.
+    news_batch_size: int = 20
+    news_max_calls_per_run: int = 3
+    # News older than this isn't read, and doesn't move a projection.
+    news_max_age_days: int = 7
 
     @property
     def database_url(self) -> str:

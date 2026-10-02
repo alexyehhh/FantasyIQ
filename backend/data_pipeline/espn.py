@@ -194,6 +194,10 @@ class ESPNClient:
             raise ESPNError("Unexpected ESPN CDN game response")
         return game_package
 
+    def news(self, sport: str, league: str, team_id: str) -> dict[str, Any]:
+        """A team's latest news (ESPN caps it at 50 articles, about two weeks for an NFL team)."""
+        return self.get(sport, league, "news", team=team_id, limit="50")
+
     def teams(self, sport: str, league: str) -> dict[str, Any]:
         return self.get(sport, league, "teams", limit="100")
 
@@ -218,6 +222,3 @@ class ESPNClient:
 
     def injuries(self, sport: str, league: str) -> dict[str, Any]:
         return self.get(sport, league, "injuries")
-
-    def news(self, sport: str, league: str) -> dict[str, Any]:
-        return self.get(sport, league, "news")

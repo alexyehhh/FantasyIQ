@@ -9,6 +9,7 @@ so autogenerate can see all tables. Anything added here later
 from app.db.models.field_goal_kick import FieldGoalKick
 from app.db.models.game import Game
 from app.db.models.job_run import JobRun
+from app.db.models.news import GeminiCall, NewsItem
 from app.db.models.player import Player
 from app.db.models.player_game_stats import PlayerGameStats
 from app.db.models.player_game_stats_nfl import PlayerGameStatsNFL
@@ -21,6 +22,8 @@ __all__ = [
     "Player",
     "Game",
     "JobRun",
+    "NewsItem",
+    "GeminiCall",
     "PlayerGameStats",
     "PlayerGameStatsNFL",
     "FieldGoalKick",

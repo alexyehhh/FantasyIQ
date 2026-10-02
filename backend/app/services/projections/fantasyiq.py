@@ -347,12 +347,16 @@ def _news_notes(
         order = news.depth.get(row.player.id)
         if order is not None:
             lines.append(f"Depth chart lists him {row.player.position}{order}.")
+        read = news.read.get(row.player.id)
+        if read and read.get("note"):
+            lines.append(f"News: {read['note']}")
         notes[row.player.id] = lines
         facts[row.player.id] = {
             "teammates_out": [
                 people[q].name for q in sorted(missing[row.player.id]) if q in people
             ],
             "depth_order": order,
+            "news": news.read.get(row.player.id),
         }
     return notes, facts
 

@@ -241,6 +241,7 @@ def test_build_lanes_keeps_live_games_apart_from_the_slow_jobs():
         "injuries",
         "backfill",
         "snapshots",
+        "news",
     ]
     assert [job.name for job in models._jobs] == ["retrain"]
     assert set(worker.job_intervals(Settings())) == {

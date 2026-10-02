@@ -11,6 +11,8 @@ long roster sync can't hold up a live game, and minutes of model training can't 
     backfill    every hour    box scores of finished games older than the live refresh looks back
     snapshots   every hour    each projection source's projections for upcoming games, saved to be
                               scored against the real results (services/projections/snapshots.py)
+    news        every 30 min  ESPN's NFL player news, read by Gemini into facts for the model
+                              (data_pipeline/espn_news.py, app/services/news/extract.py)
     retrain     every week    our projection models refit on every finished game, each kept only
                               if it scores no worse than the saved one (app/ml/retrain.py)
 
@@ -37,13 +39,15 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Engine, select, text
 
+from app.ai.budget import GeminiBudget
 from app.core.config import Settings, get_settings
 from app.db.models import JobRun
 from app.db.session import SessionLocal, engine
 from app.ml import retrain
+from app.services.news import extract as news_extract
 from app.services.projections import snapshots
 from data_pipeline import backfill as backfill_job
-from data_pipeline import espn_directory
+from data_pipeline import espn_directory, espn_news
 from data_pipeline.espn import ESPNClient
 from data_pipeline.refresh import SPORTS, LiveRefresher
 
@@ -230,6 +234,45 @@ def run_snapshots() -> None:
         raise RuntimeError("; ".join(report.errors))
 
 
+def run_news() -> None:
+    """Save new NFL player news from ESPN, then have Gemini read what is unread, within its
+    budget. A Gemini that is busy or out of quota is not a failure: the articles wait."""
+    settings = get_settings()
+    client = ESPNClient(timeout=settings.nfl_api_timeout_seconds)
+    errors = []
+    try:
+        with SessionLocal() as db:
+            try:
+                fetched = espn_news.refresh_news(
+                    db,
+                    client,
+                    "NFL",
+                    max_age=timedelta(days=settings.news_max_age_days),
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+        logger.info("News: %s", fetched.summary())
+        errors += fetched.errors or []
+    finally:
+        client.close()
+    budget = GeminiBudget(
+        settings.news_gemini_model,
+        per_minute=settings.news_gemini_per_minute,
+        per_day=settings.news_gemini_per_day,
+    )
+    with SessionLocal() as db:
+        try:
+            read = news_extract.extract_pending(db, budget)
+        except Exception:
+            db.rollback()
+            raise
+    logger.info("News reading: %s", read.summary())
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+
 def run_retrain() -> None:
     """Retrain our projection models on every finished game; see app/ml/retrain.py for when a new
     model replaces the saved one."""
@@ -251,6 +294,7 @@ def job_intervals(settings: Settings) -> dict[str, float]:
         "backfill": settings.worker_backfill_interval_seconds,
         "snapshots": settings.worker_snapshots_interval_seconds,
         "retrain": settings.worker_retrain_interval_seconds,
+        "news": settings.worker_news_interval_seconds,
     }
 
 
@@ -271,6 +315,7 @@ def build_lanes(settings: Settings) -> list[Scheduler]:
                 lambda: run_backfill(settings.worker_backfill_games_per_run),
             ),
             Job("snapshots", _seconds(intervals["snapshots"]), run_snapshots),
+            Job("news", _seconds(intervals["news"]), run_news),
         ],
         poll_seconds=30.0,
     )

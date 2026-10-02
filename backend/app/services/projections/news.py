@@ -5,9 +5,14 @@ who is next in line when a starter is hurt (Braelon Allen is listed RB1 once Bre
 doubtful), and Sleeper's injury status, which comes from Rotowire's reporting, can be ahead of the
 ESPN status we sync. `Feed.for_teams` hands both to the model.
 
-Nothing is stored: the file is fetched on demand and kept in memory for hours (Sleeper asks for it
-to be fetched sparingly). News is an extra, so failing to reach Sleeper gives an empty feed, never
-an error: the model then projects from box scores and ESPN's injury list alone.
+A third source is the news Gemini has read (app/services/news/): an article that says a player is
+out for the team's coming game adds him to the players expected out, which frees up his
+teammates' workload. What it says about a player's role is saved with the projection and shown in
+its notes but doesn't move the number, because there is no history to say by how much.
+
+Nothing is stored here: the file is fetched on demand and kept in memory for hours (Sleeper asks
+for it to be fetched sparingly). News is an extra, so failing to reach Sleeper gives an empty
+feed, never an error: the model then projects from box scores and ESPN's injury list alone.
 """
 
 from __future__ import annotations
@@ -17,13 +22,14 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Player, Team
+from app.db.models import Game, NewsItem, Player, Team
 from app.services.projections.sleeper import _name, _team
 
 log = logging.getLogger(__name__)
@@ -52,6 +58,8 @@ class TeamNews:
     depth: dict[int, int] = field(default_factory=dict)
     out_by_team: dict[int, set[int]] = field(default_factory=dict)
     notes: dict[int, str] = field(default_factory=dict)
+    # What Gemini read in the news about a player's coming game, by player id (see _read_news).
+    read: dict[int, dict[str, object]] = field(default_factory=dict)
 
 
 class Feed:
@@ -124,8 +132,20 @@ class Feed:
         if not ids:
             return news
         index = self._players(sport)
-        if not index:
-            return news
+        if index:
+            self._add_sleeper(db, sport, index, ids, news)
+        # Stored news is read whether or not Sleeper answered.
+        _read_news(db, sport, ids, news)
+        return news
+
+    def _add_sleeper(
+        self,
+        db: Session,
+        sport: str,
+        index: dict[tuple[str, str], list[Item]],
+        ids: list[int],
+        news: TeamNews,
+    ) -> None:
         rows = db.execute(
             select(Player, Team.abbreviation)
             .join(Team, Player.team_id == Team.id)
@@ -146,7 +166,58 @@ class Feed:
                 news.notes[player.id] = f"{item.injury_status}" + (
                     f" ({item.injury_note})" if item.injury_note else ""
                 )
-        return news
+
+
+# What a news item can say about availability that counts as expected out, as for Sleeper's.
+_NEWS_OUT = {"out", "doubtful"}
+
+
+def _read_news(db: Session, sport: str, team_ids: list[int], news: TeamNews) -> None:
+    """Add what Gemini read in recent news about each team's coming game: an out or doubtful
+    player joins `out_by_team`, and every such fact is kept in `read`. Only news published after
+    the team's last kickoff counts, so "out for Week 3" isn't still applied in Week 4, and the
+    latest article about a player wins."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    since = now - timedelta(days=get_settings().news_max_age_days)
+    last_kickoff = dict(
+        db.execute(
+            select(Team.id, func.max(Game.start_time))
+            .join(Game, or_(Game.home_team_id == Team.id, Game.away_team_id == Team.id))
+            .where(Team.id.in_(team_ids), Game.sport == sport, Game.start_time <= now)
+            .group_by(Team.id)
+        ).all()
+    )
+    team_of = dict(
+        db.execute(select(Player.id, Player.team_id).where(Player.team_id.in_(team_ids))).all()
+    )
+    items = db.scalars(
+        select(NewsItem)
+        .where(
+            NewsItem.sport == sport,
+            NewsItem.status == "done",
+            NewsItem.published_at >= since,
+            NewsItem.facts.is_not(None),
+        )
+        .order_by(NewsItem.published_at)  # oldest first, so a later article overwrites an earlier
+    )
+    for item in items:
+        for fact in item.facts or []:
+            pid = fact.get("player_id")
+            tid = team_of.get(pid)
+            if tid is None or not fact.get("about_next_game"):
+                continue
+            if item.published_at < last_kickoff.get(tid, since):
+                continue
+            news.read[pid] = {
+                "availability": fact.get("availability"),
+                "role": fact.get("role"),
+                "note": fact.get("note"),
+                "published": item.published_at.isoformat(timespec="minutes"),
+            }
+    for pid, fact in news.read.items():
+        if fact["availability"] in _NEWS_OUT:
+            news.out_by_team.setdefault(team_of[pid], set()).add(pid)
+            news.notes.setdefault(pid, f"{fact['availability']} per news")
 
 
 FEED = Feed()
